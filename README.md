@@ -4,7 +4,7 @@
 
 ## Описание
 
-Бот принимает голосовые сообщения в Telegram, распознаёт речь через Google Speech Recognition, затем исправляет пунктуацию через OpenAI-совместимый API (локальный или внешний). Поддерживает длинные аудиосообщения (разбивает на сегменты по 15 секунд).
+Бот принимает голосовые сообщения в Telegram, распознаёт речь (Google Speech Recognition или Vosk — настраивается в `.env`), затем исправляет пунктуацию через OpenAI-совместимый API (локальный или внешний). Поддерживает длинные аудиосообщения (разбивает на сегменты по 15 секунд).
 
 ## Установка
 
@@ -36,6 +36,8 @@ OPENAI_API_KEY=your-api-key-here
 OPENAI_BASE_URL=http://192.168.0.250:1234/v1
 OPENAI_MODEL=mistral-medium-latest
 PROXY_STRING=socks5://127.0.0.1:2080
+STT_PROVIDER=vosk
+VOSK_MODEL_PATH=models/vosk-model-small-ru-0.22
 ```
 
 ### Запуск
@@ -64,6 +66,27 @@ python VoiceTranslator.py
 | `OPENAI_BASE_URL` | `http://192.168.0.250:1234/v1` | Базовый URL API (локальный или внешний) |
 | `OPENAI_MODEL` | `mistral-medium-latest` | Модель для коррекции пунктуации |
 | `PROXY_STRING` | — | SOCKS5/HTTP прокси для всех внешних запросов (Telegram API, OpenAI, Google STT) |
+| `STT_PROVIDER` | `google` | Провайдер распознавания речи: `google` (онлайн) или `vosk` (локально) |
+| `VOSK_MODEL_PATH` | `models/vosk-model-small-ru-0.22` | Путь к модели Vosk (только для STT_PROVIDER=vosk) |
+
+## Speech-to-Text провайдеры
+
+| Провайдер | Тип | Русский | API-ключ | Интернет | Производительность |
+|-----------|-----|---------|----------|----------|-------------------|
+| `google` | Google Speech Recognition | ✓ | не нужен | требуется | быстро, но онлайн |
+| `vosk` | Vosk (локально) | ✓ | не нужен | не требуется | ~42MB модель, слабое железо |
+
+Для Vosk скачайте модель и распакуйте в `models/`:
+
+```bash
+# Скачать модель ~42MB
+wget https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip
+# или
+curl -O https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip
+
+# Распаковать
+unzip vosk-model-small-ru-0.22.zip -d models/
+```
 
 ## Зависимости
 
@@ -73,6 +96,7 @@ SpeechRecognition
 pydub
 python-dotenv
 requests[socks]
+vosk
 ```
 
 ## Лицензия

@@ -20,6 +20,12 @@ PROXY_SCHEME = PROXY_STRING.split("://")[0] if "://" in PROXY_STRING else ""
 PROXY_NETLOC = PROXY_STRING.split("://", 1)[1] if "://" in PROXY_STRING else ""
 IS_SOCKS = PROXY_SCHEME.startswith("socks")
 
+# Speech-to-Text
+# google — Google Speech Recognition (онлайн, бесплатно, требуется прокси)
+# vosk   — Vosk (локально, без интернета)
+STT_PROVIDER = os.getenv("STT_PROVIDER", "google")
+VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-small-ru-0.22")
+
 def get_proxy_dict() -> dict | None:
     if not PROXY_STRING:
         return None

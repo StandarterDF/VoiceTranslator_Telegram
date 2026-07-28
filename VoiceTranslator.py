@@ -9,8 +9,9 @@ import requests
 import json
 import time
 import traceback
+import wave
 
-from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, PROXY_SCHEME, IS_SOCKS, get_proxy_dict
+from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, PROXY_SCHEME, IS_SOCKS, STT_PROVIDER, VOSK_MODEL_PATH, get_proxy_dict
 
 # Создаем папку logs/, если её нет
 os.makedirs("logs", exist_ok=True)
@@ -174,53 +175,108 @@ def split_audio_file(input_path, output_dir, segment_length_ms=60000):
     
     return segments
 
-def transcribe_audio(file_path, max_retries=3):
-    logger.info(f"Начало транскрипции: {file_path}")
+# ---------------------------------------------------------------------------
+# Speech-to-Text провайдеры
+# ---------------------------------------------------------------------------
+
+def _transcribe_google(file_path: str, max_retries: int = 3) -> str | None:
+    recognizer = Recognizer()
     for attempt in range(max_retries):
         try:
             with AudioFile(file_path) as source:
-                logger.info(f"Загрузка аудио файла: {file_path}")
                 audio = recognizer.record(source)
-                logger.info(f"Аудио файл загружен, начало распознавания (попытка {attempt + 1}/{max_retries})")
-            
-            # Пробуем распознать речь с тайм-аутом
-            try:
-                # Устанавливаем прокси для запросов к Google Speech Recognition
-                if PROXY_STRING:
-                    os.environ['HTTP_PROXY'] = PROXY_STRING
-                    logger.info(f"Установлен прокси для SpeechRecognition: {PROXY_STRING}")
-                
-                # Устанавливаем тайм-аут для распознавания
-                result = recognizer.recognize_google(audio, language='ru-RU', show_all=False)
-                logger.info(f"Транскрипция завершена. Текст: {result[:50]}...")
-                return result
-            except sr.UnknownValueError:
-                logger.error("Google Speech Recognition не смог распознать аудио")
-                return None
-            except sr.RequestError as e:
-                logger.error(f"Ошибка запроса к Google Speech Recognition: {str(e)}")
-                if attempt < max_retries - 1:
-                    logger.info(f"Повторная попытка через 2 секунды... (попытка {attempt + 2}/{max_retries})")
-                    time.sleep(2)
-                    continue
-                return None
-            finally:
-                # Удаляем переменные окружения прокси после распознавания
-                if PROXY_STRING:
-                    os.environ.pop('HTTP_PROXY', None)
-                    os.environ.pop('HTTPS_PROXY', None)
-        except Exception as e:
-            logger.error(f"Ошибка транскрипции (попытка {attempt + 1}/{max_retries}): {str(e)}")
+
+            if PROXY_STRING:
+                os.environ['HTTP_PROXY'] = PROXY_STRING
+
+            result = recognizer.recognize_google(audio, language='ru-RU', show_all=False)
+            return result
+
+        except sr.UnknownValueError:
+            logger.error("Google Speech Recognition не смог распознать аудио")
+            return None
+        except sr.RequestError as e:
+            logger.error(f"Ошибка запроса к Google Speech Recognition: {e}")
             if attempt < max_retries - 1:
-                logger.info(f"Повторная попытка через 2 секунды... (попытка {attempt + 2}/{max_retries})")
                 time.sleep(2)
                 continue
-            logger.error(f"Трассировка ошибки: {traceback.format_exc()}")
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка транскрипции Google (попытка {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            return None
+        finally:
+            os.environ.pop('HTTP_PROXY', None)
+            os.environ.pop('HTTPS_PROXY', None)
+    return None
+
+
+def _init_vosk_model():
+    from vosk import Model
+    import os
+    path = VOSK_MODEL_PATH
+    if not os.path.isdir(path):
+        alt = os.path.join("models", os.path.basename(path))
+        if os.path.isdir(alt):
+            path = alt
+    logger.info("Loading Vosk model from %s ...", path)
+    model = Model(path)
+    logger.info("Vosk model loaded")
+    return model
+
+
+_vosk_model = None
+
+def _transcribe_vosk(file_path: str, max_retries: int = 3) -> str | None:
+    global _vosk_model
+    if _vosk_model is None:
+        _vosk_model = _init_vosk_model()
+
+    from vosk import KaldiRecognizer
+
+    for attempt in range(max_retries):
+        try:
+            wf = wave.open(file_path, "rb")
+            if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() not in (8000, 16000, 32000, 44100, 48000):
+                logger.warning("Vosk: unsupported audio format, converting...")
+                wf.close()
+                converted = file_path.replace(".wav", "_vosk.wav")
+                audio_seg = AudioSegment.from_file(file_path)
+                audio_seg = audio_seg.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+                audio_seg.export(converted, format="wav")
+                wf = wave.open(converted, "rb")
+
+            rec = KaldiRecognizer(_vosk_model, wf.getframerate())
+            while True:
+                data = wf.readframes(4000)
+                if len(data) == 0:
+                    break
+                rec.AcceptWaveform(data)
+
+            wf.close()
+            result = json.loads(rec.FinalResult())
+            text = result.get("text", "").strip()
+            if text:
+                logger.info(f"Vosk транскрипция: {text[:50]}...")
+                return text
+            logger.warning("Vosk не распознал речь")
+            return None
+
+        except Exception as e:
+            logger.error(f"Ошибка Vosk (попытка {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
             return None
     return None
 
-# Инициализация распознавателя речи
-recognizer = Recognizer()
+
+def transcribe_audio(file_path: str, max_retries: int = 3) -> str | None:
+    if STT_PROVIDER == "vosk":
+        return _transcribe_vosk(file_path, max_retries)
+    return _transcribe_google(file_path, max_retries)
 
 @bot.message_handler(content_types=['voice'])
 def handle_voice(message):
