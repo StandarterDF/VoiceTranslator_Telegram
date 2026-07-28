@@ -410,165 +410,70 @@ def handle_text(message):
         bot.reply_to(message, "Я обрабатываю только голосовые сообщения. Пожалуйста, отправьте голосовое сообщение.")
 
 
-def handle_replied_voice(message):
-    """Обрабатывает голосовое сообщение, на которое отвечают с упоминанием бота."""
-    # Получаем голосовое сообщение, на которое отвечают
-    voice_message = message.reply_to_message
-    file_id = voice_message.voice.file_id
-    
+_NEEDS_SPLIT = STT_PROVIDER == "google"
+
+def _transcribe_and_correct(wav_path, message, long_msg):
+    if _NEEDS_SPLIT:
+        audio = AudioSegment.from_file(wav_path)
+        if len(audio) > 60000:
+            logger.info(f"Аудио длинное ({len(audio) / 1000:.0f}с), разбиваем...")
+            bot.reply_to(message, long_msg)
+            segments_dir = os.path.join(os.path.dirname(wav_path), "segments")
+            segments = split_audio_file(wav_path, segments_dir, segment_length_ms=15000)
+            full_text = ""
+            for i, seg_path in enumerate(segments):
+                seg_text = transcribe_audio(seg_path)
+                if seg_text:
+                    full_text += seg_text + " "
+            text = full_text.strip()
+        else:
+            text = transcribe_audio(wav_path)
+    else:
+        text = transcribe_audio(wav_path)
+
+    if not text:
+        bot.reply_to(message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз.")
+        return
+
+    logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
+    corrected = openai_client.correct_punctuation(text)
+    logger.info(f"После коррекции ({len(corrected)} символов): {corrected[:200]}...")
+    bot.reply_to(message, corrected)
+
+
+def _download_voice(file_id):
     new_file = bot.get_file(file_id)
     logger.info(f"Получение файла: {new_file.file_path}")
-
     temp_dir = 'temp'
     os.makedirs(temp_dir, exist_ok=True)
     file_path = os.path.join(temp_dir, f'{file_id}.ogg')
-    downloaded_file = bot.download_file(new_file.file_path)
-
     with open(file_path, 'wb') as f:
-        logger.info(f"Сохраняю файл: {file_path}")
-        f.write(downloaded_file)
+        f.write(bot.download_file(new_file.file_path))
+    return file_path
 
+
+def handle_replied_voice(message):
+    file_path = _download_voice(message.reply_to_message.voice.file_id)
     try:
-        # Конвертация OGG в WAV
-        wav_file_path = file_path.replace('.ogg', '.wav')
-        convert_ogg_to_wav(file_path, wav_file_path)
-        
-        # Проверяем длину аудиофайла
-        audio = AudioSegment.from_file(wav_file_path)
-        audio_duration_ms = len(audio)
-        
-        if audio_duration_ms > 60000:  # Если длина больше 60 секунд
-            logger.info(f"Аудиофайл слишком длинный ({audio_duration_ms / 1000} секунд). Разбиваем на части...")
-            bot.reply_to(message, "Голосовое сообщение длинное. Обрабатываю по частям...")
-            
-            # Разбиваем аудиофайл на сегменты (15 секунд каждый)
-            segments_dir = os.path.join(temp_dir, f'{file_id}_segments')
-            segments = split_audio_file(wav_file_path, segments_dir, segment_length_ms=15000)
-            
-            # Обрабатываем каждый сегмент (только транскрипция)
-            full_text = ""
-            for i, segment_path in enumerate(segments):
-                logger.info(f"Обработка сегмента {i + 1}/{len(segments)}: {segment_path}")
-                segment_text = transcribe_audio(segment_path, max_retries=3)
-                
-                if segment_text is None:
-                    bot.reply_to(message, f"Не удалось распознать речь в сегменте {i + 1}.")
-                    continue
-                
-                logger.info(f"Текст сегмента {i + 1}: {segment_text[:100]}...")
-                full_text += segment_text + " "
-            
-            # Логируем полный текст перед отправкой в нейронку
-            logger.info(f"Полный текст перед коррекцией: {full_text[:200]}...")
-            logger.info(f"Длина полного текста: {len(full_text)} символов")
-            
-            # Коррекция пунктуации для всего текста
-            corrected_text = openai_client.correct_punctuation(full_text.strip())
-            
-            # Логируем результат коррекции
-            logger.info(f"Текст после коррекции: {corrected_text[:200]}...")
-            logger.info(f"Длина текста после коррекции: {len(corrected_text)} символов")
-            
-            # Отправляем весь текст как Markdown
-            bot.reply_to(message, corrected_text, parse_mode='Markdown')
-        else:
-            text = transcribe_audio(wav_file_path, max_retries=3)
-
-            if text is None:
-                bot.reply_to(message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз.")
-                return
-
-            logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
-            corrected_text = openai_client.correct_punctuation(text)
-            logger.info(f"После коррекции ({len(corrected_text)} символов): {corrected_text[:200]}...")
-
-            if corrected_text != text:
-                bot.reply_to(message, corrected_text, parse_mode='Markdown')
-            else:
-                bot.reply_to(message, corrected_text)
+        wav_path = file_path.replace('.ogg', '.wav')
+        convert_ogg_to_wav(file_path, wav_path)
+        _transcribe_and_correct(wav_path, message, "Голосовое сообщение длинное. Обрабатываю по частям...")
     finally:
         os.remove(file_path)
-        if os.path.exists(wav_file_path):
-            os.remove(wav_file_path)
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
 
 
 def handle_voice_message(message):
-    file_id = message.voice.file_id
-    new_file = bot.get_file(file_id)
-    logger.info(f"Получение файла: {new_file.file_path}")
-
-    temp_dir = 'temp'
-    os.makedirs(temp_dir, exist_ok=True)
-    file_path = os.path.join(temp_dir, f'{file_id}.ogg')
-    downloaded_file = bot.download_file(new_file.file_path)
-
-    with open(file_path, 'wb') as f:
-        logger.info(f"Сохраняю файл: {file_path}")
-        f.write(downloaded_file)
-
+    file_path = _download_voice(message.voice.file_id)
     try:
-        # Конвертация OGG в WAV
-        wav_file_path = file_path.replace('.ogg', '.wav')
-        convert_ogg_to_wav(file_path, wav_file_path)
-        
-        # Проверяем длину аудиофайла
-        audio = AudioSegment.from_file(wav_file_path)
-        audio_duration_ms = len(audio)
-        
-        if audio_duration_ms > 60000:  # Если длина больше 60 секунд
-            logger.info(f"Аудиофайл слишком длинный ({audio_duration_ms / 1000} секунд). Разбиваем на части...")
-            bot.reply_to(message, "Ваше голосовое сообщение длинное. Обрабатываю по частям...")
-            
-            # Разбиваем аудиофайл на сегменты (15 секунд каждый)
-            segments_dir = os.path.join(temp_dir, f'{file_id}_segments')
-            segments = split_audio_file(wav_file_path, segments_dir, segment_length_ms=15000)
-            
-            # Обрабатываем каждый сегмент (только транскрипция)
-            full_text = ""
-            for i, segment_path in enumerate(segments):
-                logger.info(f"Обработка сегмента {i + 1}/{len(segments)}: {segment_path}")
-                segment_text = transcribe_audio(segment_path, max_retries=3)
-                
-                if segment_text is None:
-                    bot.reply_to(message, f"Не удалось распознать речь в сегменте {i + 1}.")
-                    continue
-                
-                logger.info(f"Текст сегмента {i + 1}: {segment_text[:100]}...")
-                full_text += segment_text + " "
-            
-            # Логируем полный текст перед отправкой в нейронку
-            logger.info(f"Полный текст перед коррекцией: {full_text[:200]}...")
-            logger.info(f"Длина полного текста: {len(full_text)} символов")
-            
-            # Коррекция пунктуации для всего текста
-            corrected_text = openai_client.correct_punctuation(full_text.strip())
-            
-            # Логируем результат коррекции
-            logger.info(f"Текст после коррекции: {corrected_text[:200]}...")
-            logger.info(f"Длина текста после коррекции: {len(corrected_text)} символов")
-            
-            # Отправляем весь текст как Markdown
-            bot.reply_to(message, corrected_text, parse_mode='Markdown')
-        else:
-            # Транскрипция
-            text = transcribe_audio(wav_file_path, max_retries=3)
-            
-            if text is None:
-                bot.reply_to(message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз.")
-                return
-
-            logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
-            corrected_text = openai_client.correct_punctuation(text)
-            logger.info(f"После коррекции ({len(corrected_text)} символов): {corrected_text[:200]}...")
-
-            if corrected_text != text:
-                bot.reply_to(message, corrected_text, parse_mode='Markdown')
-            else:
-                bot.reply_to(message, corrected_text)
+        wav_path = file_path.replace('.ogg', '.wav')
+        convert_ogg_to_wav(file_path, wav_path)
+        _transcribe_and_correct(wav_path, message, "Ваше голосовое сообщение длинное. Обрабатываю по частям...")
     finally:
         os.remove(file_path)
-        if os.path.exists(wav_file_path):
-            os.remove(wav_file_path)
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
 
 
 if __name__ == '__main__':
