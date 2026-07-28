@@ -10,7 +10,7 @@ import json
 import time
 import traceback
 
-from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, get_proxy_dict
+from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, PROXY_SCHEME, IS_SOCKS, get_proxy_dict
 
 # Создаем папку logs/, если её нет
 os.makedirs("logs", exist_ok=True)
@@ -89,7 +89,7 @@ API_TOKEN = BOT_TOKEN
 # Настройка прокси
 proxies = get_proxy_dict()
 if proxies:
-    logger.info(f"Бот настроен для работы через прокси: {PROXY_STRING}")
+    logger.info(f"Бот настроен для работы через прокси: {PROXY_STRING} ({PROXY_SCHEME})")
 else:
     logger.info("Бот работает без прокси")
 
@@ -102,12 +102,12 @@ try:
         import telebot.apihelper
         telebot.apihelper.proxy = {'https': PROXY_STRING}
         bot = telebot.TeleBot(API_TOKEN)
-        logger.info(f"Бот настроен для работы через прокси: {PROXY_STRING}")
+        logger.info(f"Telegram бот через прокси: {PROXY_STRING} ({PROXY_SCHEME})")
     else:
         bot = telebot.TeleBot(API_TOKEN)
-        logger.info("Бот работает без прокси")
+        logger.info("Telegram бот без прокси")
 except Exception as e:
-    logger.error(f"Ошибка настройки прокси для Telegram-бота: {str(e)}")
+    logger.error(f"Ошибка настройки прокси для Telegram-бота: {e}")
     logger.info("Бот будет работать без прокси")
     bot = telebot.TeleBot(API_TOKEN)
 

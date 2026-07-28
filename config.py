@@ -16,6 +16,9 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "mistral-medium-latest")
 
 # Proxy
 PROXY_STRING = os.getenv("PROXY_STRING", "")
+PROXY_SCHEME = PROXY_STRING.split("://")[0] if "://" in PROXY_STRING else ""
+PROXY_NETLOC = PROXY_STRING.split("://", 1)[1] if "://" in PROXY_STRING else ""
+IS_SOCKS = PROXY_SCHEME.startswith("socks")
 
 def get_proxy_dict() -> dict | None:
     if not PROXY_STRING:
@@ -33,7 +36,7 @@ def check_proxy_connection() -> bool:
         host = parsed.hostname
         port = parsed.port or 2080
         with socket.create_connection((host, port), timeout=5):
-            log.info("Proxy connection OK: %s", PROXY_STRING)
+            log.info("Proxy connection OK: %s (%s)", PROXY_STRING, PROXY_SCHEME)
             return True
     except Exception as e:
         log.warning("Proxy connection failed (%s), will use direct connections", e)

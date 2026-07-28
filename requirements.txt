@@ -2,4 +2,4 @@ pyTelegramBotAPI
 SpeechRecognition
 pydub
 python-dotenv
-requests
+requests[socks]

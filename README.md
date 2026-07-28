@@ -35,7 +35,7 @@ BOT_TOKEN=your-telegram-bot-token-here
 OPENAI_API_KEY=your-api-key-here
 OPENAI_BASE_URL=http://192.168.0.250:1234/v1
 OPENAI_MODEL=mistral-medium-latest
-PROXY_STRING=http://127.0.0.1:2081
+PROXY_STRING=socks5://127.0.0.1:2080
 ```
 
 ### Запуск
@@ -63,7 +63,7 @@ python VoiceTranslator.py
 | `OPENAI_API_KEY` | — | API-ключ для OpenAI-совместимого API |
 | `OPENAI_BASE_URL` | `http://192.168.0.250:1234/v1` | Базовый URL API (локальный или внешний) |
 | `OPENAI_MODEL` | `mistral-medium-latest` | Модель для коррекции пунктуации |
-| `PROXY_STRING` | — | Прокси для Telegram API (опционально) |
+| `PROXY_STRING` | — | SOCKS5/HTTP прокси для всех внешних запросов (Telegram API, OpenAI, Google STT) |
 
 ## Зависимости
 
@@ -72,7 +72,7 @@ pyTelegramBotAPI
 SpeechRecognition
 pydub
 python-dotenv
-requests
+requests[socks]
 ```
 
 ## Лицензия
