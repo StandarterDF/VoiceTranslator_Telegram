@@ -68,7 +68,7 @@ python VoiceTranslator.py
 | `PROXY_STRING` | — | SOCKS5/HTTP прокси для всех внешних запросов (Telegram API, OpenAI, Google STT) |
 | `STT_PROVIDER` | `google` | Провайдер распознавания речи: `google`, `vosk`, `faster_whisper` |
 | `VOSK_MODEL_PATH` | `models/vosk-model-small-ru-0.22` | Путь к модели Vosk (только для STT_PROVIDER=vosk) |
-| `WHISPER_MODEL_SIZE` | `tiny` | Размер модели Whisper: `tiny`, `base`, `small`, `medium` |
+| `WHISPER_MODEL_SIZE` | `small` | Размер модели Whisper: `tiny`, `base`, `small`, `large-v3-turbo` |
 
 ## Speech-to-Text провайдеры
 

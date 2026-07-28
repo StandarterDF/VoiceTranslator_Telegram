@@ -11,7 +11,13 @@ import time
 import traceback
 import wave
 
-from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, PROXY_SCHEME, IS_SOCKS, STT_PROVIDER, VOSK_MODEL_PATH, WHISPER_MODEL_SIZE, WHISPER_MODEL_PATH, WHISPER_DEVICE, WHISPER_COMPUTE, get_proxy_dict
+import config as _config
+from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, PROXY_SCHEME, VOSK_MODEL_PATH, WHISPER_DEVICE, WHISPER_COMPUTE, get_proxy_dict
+
+# Модульные переменные (могут быть переопределены в __main__)
+STT_PROVIDER = _config.STT_PROVIDER
+WHISPER_MODEL_SIZE = _config.WHISPER_MODEL_SIZE
+WHISPER_MODEL_PATH = _config.WHISPER_MODEL_PATH
 
 # Создаем папку logs/, если её нет
 os.makedirs("logs", exist_ok=True)
@@ -409,11 +415,11 @@ def handle_text(message):
         bot.reply_to(message, "Я обрабатываю только голосовые сообщения. Пожалуйста, отправьте голосовое сообщение.")
 
 
-_NEEDS_CORRECTION = STT_PROVIDER == "google"
-_NEEDS_SPLIT = STT_PROVIDER == "google"
-
 def _transcribe_and_correct(wav_path, message, long_msg):
-    if _NEEDS_SPLIT:
+    needs_split = STT_PROVIDER == "google"
+    needs_correction = STT_PROVIDER == "google"
+
+    if needs_split:
         audio = AudioSegment.from_file(wav_path)
         if len(audio) > 60000:
             logger.info(f"Аудио длинное ({len(audio) / 1000:.0f}с), разбиваем...")
@@ -437,7 +443,7 @@ def _transcribe_and_correct(wav_path, message, long_msg):
 
     logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
 
-    if _NEEDS_CORRECTION:
+    if needs_correction:
         corrected = openai_client.correct_punctuation(text)
         if not corrected or not corrected.strip():
             logger.warning("Коррекция вернула пустую строку, отправляю оригинал")
@@ -509,6 +515,40 @@ def handle_voice_message(message):
 
 if __name__ == '__main__':
     logger.info("Бот запущен")
+
+    # Интерактивный выбор STT при старте
+    import sys as _sys, importlib as _il
+
+    print("\n=== VoiceTranslator ===")
+    print("Выберите режим распознавания речи:")
+    print("  1 — Vosk (локально, слабое качество)")
+    print("  2 — Google Speech Recognition (онлайн, + коррекция пунктуации)")
+    print("  3 — Whisper tiny (локально, ~75MB)")
+    print("  4 — Whisper base (локально, ~150MB)")
+    print("  5 — Whisper small (локально, ~500MB)")
+    print("  6 — Whisper large-v3-turbo (локально, ~1.2GB, лучшее качество)")
+    print("  Enter — оставить текущий:", STT_PROVIDER + (f" / {WHISPER_MODEL_SIZE}" if STT_PROVIDER == "faster_whisper" else ""))
+
+    choice = input(">>> ").strip()
+
+    _map = {
+        "1": ("vosk", None),
+        "2": ("google", None),
+        "3": ("faster_whisper", "tiny"),
+        "4": ("faster_whisper", "base"),
+        "5": ("faster_whisper", "small"),
+        "6": ("faster_whisper", "large-v3-turbo"),
+    }
+    if choice in _map:
+        _prov, _size = _map[choice]
+        globals()["STT_PROVIDER"] = _prov
+        if _size:
+            globals()["WHISPER_MODEL_SIZE"] = _size
+            globals()["WHISPER_MODEL_PATH"] = f"models/whisper-{_size}"
+        print(f"Выбран: {_prov}" + (f" / {_size}" if _size else ""))
+    else:
+        print(f"Оставлен: {STT_PROVIDER}" + (f" / {WHISPER_MODEL_SIZE}" if STT_PROVIDER == "faster_whisper" else ""))
+
     proxy_was_used = bool(PROXY_STRING)
     while True:
         try:
