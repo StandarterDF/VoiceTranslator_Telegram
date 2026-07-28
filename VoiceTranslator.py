@@ -454,8 +454,22 @@ def _transcribe_and_correct(wav_path, message, long_msg):
     if len(corrected) <= max_len:
         bot.reply_to(message, corrected)
     else:
-        for i in range(0, len(corrected), max_len):
-            bot.reply_to(message, corrected[i:i + max_len])
+        while corrected:
+            if len(corrected) <= max_len:
+                bot.reply_to(message, corrected)
+                break
+            split_at = max(
+                corrected.rfind(". ", 0, max_len),
+                corrected.rfind("! ", 0, max_len),
+                corrected.rfind("? ", 0, max_len),
+                corrected.rfind("\n", 0, max_len),
+            )
+            if split_at == -1:
+                split_at = corrected.rfind(" ", 0, max_len)
+            if split_at == -1:
+                split_at = max_len
+            bot.reply_to(message, corrected[:split_at + 1].strip())
+            corrected = corrected[split_at + 1:].strip()
 
 
 def _download_voice(file_id):
