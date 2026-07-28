@@ -437,7 +437,14 @@ def _transcribe_and_correct(wav_path, message, long_msg):
 
     logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
     corrected = openai_client.correct_punctuation(text)
+    if not corrected or not corrected.strip():
+        logger.warning("Коррекция вернула пустую строку, отправляю оригинал")
+        corrected = text
     logger.info(f"После коррекции ({len(corrected)} символов): {corrected[:200]}...")
+
+    if not corrected.strip():
+        bot.reply_to(message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз.")
+        return
 
     max_len = 4096
     if len(corrected) <= max_len:
