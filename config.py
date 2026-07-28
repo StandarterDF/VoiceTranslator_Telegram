@@ -29,12 +29,13 @@ VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-small-ru-0.22"
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "small")
 WHISPER_MODEL_PATH = f"models/whisper-{WHISPER_MODEL_SIZE}"
 
+import ctypes
 try:
-    import torch
-    WHISPER_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    WHISPER_COMPUTE = "float16" if WHISPER_DEVICE == "cuda" else "auto"
-except ImportError:
-    WHISPER_DEVICE = "auto"
+    ctypes.CDLL("nvcuda.dll")
+    WHISPER_DEVICE = "cuda"
+    WHISPER_COMPUTE = "float16"
+except OSError:
+    WHISPER_DEVICE = "cpu"
     WHISPER_COMPUTE = "auto"
 
 def get_proxy_dict() -> dict | None:
