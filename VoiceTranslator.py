@@ -352,6 +352,7 @@ def _transcribe_faster_whisper(file_path: str, max_retries: int = 3) -> str | No
             segments, _ = _whisper_model.transcribe(file_path, language="ru", beam_size=1)
             text = " ".join(seg.text.strip() for seg in segments).strip()
             if text:
+                logger.info(f"Транскрипция завершена. Текст: {text[:100]}...")
                 return text
             logger.warning("Faster Whisper не распознал речь")
             return None
@@ -471,18 +472,16 @@ def handle_replied_voice(message):
             # Отправляем весь текст как Markdown
             bot.reply_to(message, corrected_text, parse_mode='Markdown')
         else:
-            # Транскрипция
             text = transcribe_audio(wav_file_path, max_retries=3)
-            
+
             if text is None:
                 bot.reply_to(message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз.")
                 return
 
-            # Коррекция пунктуации
+            logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
             corrected_text = openai_client.correct_punctuation(text)
+            logger.info(f"После коррекции ({len(corrected_text)} символов): {corrected_text[:200]}...")
 
-            # Если текст был успешно обработан нейронкой (не вернулся оригинальный текст),
-            # отправляем как Markdown, иначе как обычный текст
             if corrected_text != text:
                 bot.reply_to(message, corrected_text, parse_mode='Markdown')
             else:
@@ -558,11 +557,10 @@ def handle_voice_message(message):
                 bot.reply_to(message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз.")
                 return
 
-            # Коррекция пунктуации
+            logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
             corrected_text = openai_client.correct_punctuation(text)
+            logger.info(f"После коррекции ({len(corrected_text)} символов): {corrected_text[:200]}...")
 
-            # Если текст был успешно обработан нейронкой (не вернулся оригинальный текст),
-            # отправляем как Markdown, иначе как обычный текст
             if corrected_text != text:
                 bot.reply_to(message, corrected_text, parse_mode='Markdown')
             else:
@@ -571,6 +569,7 @@ def handle_voice_message(message):
         os.remove(file_path)
         if os.path.exists(wav_file_path):
             os.remove(wav_file_path)
+
 
 if __name__ == '__main__':
     logger.info("Бот запущен")
