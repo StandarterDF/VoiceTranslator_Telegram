@@ -11,7 +11,7 @@ import time
 import traceback
 import wave
 
-from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, PROXY_SCHEME, IS_SOCKS, STT_PROVIDER, VOSK_MODEL_PATH, WHISPER_MODEL_SIZE, WHISPER_MODEL_PATH, get_proxy_dict
+from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, PROXY_SCHEME, IS_SOCKS, STT_PROVIDER, VOSK_MODEL_PATH, WHISPER_MODEL_SIZE, WHISPER_MODEL_PATH, WHISPER_DEVICE, WHISPER_COMPUTE, get_proxy_dict
 
 # Создаем папку logs/, если её нет
 os.makedirs("logs", exist_ok=True)
@@ -344,8 +344,8 @@ def _transcribe_faster_whisper(file_path: str, max_retries: int = 3) -> str | No
     if _whisper_model is None:
         logger.info("Loading Faster Whisper model '%s' from %s ...", WHISPER_MODEL_SIZE, WHISPER_MODEL_PATH)
         from faster_whisper import WhisperModel
-        _whisper_model = WhisperModel(WHISPER_MODEL_PATH, device="auto", compute_type="auto")
-        logger.info("Faster Whisper model loaded")
+        _whisper_model = WhisperModel(WHISPER_MODEL_PATH, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
+        logger.info("Faster Whisper model loaded on %s (%s)", WHISPER_DEVICE, WHISPER_COMPUTE)
 
     for attempt in range(max_retries):
         try:
