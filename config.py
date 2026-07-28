@@ -27,6 +27,7 @@ IS_SOCKS = PROXY_SCHEME.startswith("socks")
 STT_PROVIDER = os.getenv("STT_PROVIDER", "google")
 VOSK_MODEL_PATH = os.getenv("VOSK_MODEL_PATH", "models/vosk-model-small-ru-0.22")
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "tiny")
+WHISPER_MODEL_PATH = f"models/whisper-{WHISPER_MODEL_SIZE}"
 
 def get_proxy_dict() -> dict | None:
     if not PROXY_STRING:

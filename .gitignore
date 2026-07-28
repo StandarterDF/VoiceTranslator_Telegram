@@ -5,5 +5,4 @@ __pycache__/
 *.pyo
 logs/*.log
 temp/
-models/*.zip
-models/vosk-model*/
+models/
