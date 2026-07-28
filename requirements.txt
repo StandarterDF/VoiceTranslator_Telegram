@@ -5,3 +5,4 @@ python-dotenv
 requests[socks]
 vosk
 faster-whisper
+textual>=0.41.0
