@@ -37,7 +37,6 @@ class OpenAIClient:
         request_data = {
             "model": OPENAI_MODEL,
             "temperature": 0.0,
-            "max_tokens": 4096,
             "messages": [
                 {
                     "role": "system",
