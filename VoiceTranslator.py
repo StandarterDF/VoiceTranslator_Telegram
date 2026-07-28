@@ -438,7 +438,13 @@ def _transcribe_and_correct(wav_path, message, long_msg):
     logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
     corrected = openai_client.correct_punctuation(text)
     logger.info(f"После коррекции ({len(corrected)} символов): {corrected[:200]}...")
-    bot.reply_to(message, corrected)
+
+    max_len = 4096
+    if len(corrected) <= max_len:
+        bot.reply_to(message, corrected)
+    else:
+        for i in range(0, len(corrected), max_len):
+            bot.reply_to(message, corrected[i:i + max_len])
 
 
 def _download_voice(file_id):
