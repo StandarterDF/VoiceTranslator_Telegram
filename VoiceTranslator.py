@@ -8,8 +8,9 @@ import datetime
 import requests
 import json
 import time
+import traceback
 
-from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING
+from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, get_proxy_dict
 
 # Создаем папку logs/, если её нет
 os.makedirs("logs", exist_ok=True)
@@ -32,109 +33,64 @@ class OpenAIClient:
         self.base_url = OPENAI_BASE_URL
 
     def correct_punctuation(self, text):
-        try:
-            logger.info(f"Отправка запроса к OpenAI API для коррекции текста: {text[:50]}...")
-            logger.info(f"Параметры запроса: model=mistral-medium-latest, temperature=0.2")
+        request_data = {
+            "model": OPENAI_MODEL,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Вы редактор текста. Ваша задача — добавить правильную пунктуацию и форматирование к входному тексту, строго сохраняя: полную длину текста (ничего не удалять и не добавлять по смыслу); структуру предложений, за исключением необходимых знаков препинания. Не выводи ничего, кроме изменённого текста. Никаких пояснений, комментариев или дополнительного форматирования, кроме исправления пунктуации и расстановки пробелов по правилам русского языка. Текст для обработки:"
+                },
+                {
+                    "role": "user",
+                    "content": text
+                }
+            ]
+        }
 
-            # Логирование запроса
-            request_data = {
-                "model": "mistral-medium-latest",
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": """Вы редактор текста. Ваша задача — добавить правильную пунктуацию и форматирование к входному тексту, строго сохраняя:
-                            полную длину текста (ничего не удалять и не добавлять по смыслу);
-                            структуру предложений, за исключением необходимых знаков препинания.
-                            Не выводи ничего, кроме изменённого текста. Никаких пояснений, комментариев или дополнительного форматирования, кроме исправления пунктуации и расстановки пробелов по правилам русского языка.
-                            Текст для обработки:
-                        """
-                    },
-                    {
-                        "role": "user",
-                        "content": text
-                    }
-                ]
-            }
-            logger.info(f"Данные запроса: {request_data}")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+            "Accept-Encoding": "identity"
+        }
 
-            # Отправка запроса через requests
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-                "Accept-Encoding": "identity"  # Отключаем gzip-кодировку
-            }
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                data=json.dumps(request_data)
-            )
-            
-            logger.info(f"Получен ответ от сервера. Статус: {response.status_code}")
-            logger.info(f"Заголовки ответа: {response.headers}")
-            logger.info(f"Полный ответ от сервера: {response.text}")
-            
-            # Проверка успешности ответа
-            if response.status_code == 503:
-                logger.error("Сервер временно недоступен (503). Повторная попытка через 2 секунды...")
-                time.sleep(2)
-                response = requests.post(
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                resp = requests.post(
                     f"{self.base_url}/chat/completions",
                     headers=headers,
                     data=json.dumps(request_data),
-                    proxies=proxies
+                    proxies=proxies or None
                 )
-                logger.info(f"Повторный запрос. Статус: {response.status_code}")
-                logger.info(f"Полный ответ от сервера: {response.text}")
-                
-            if response.status_code != 200:
-                logger.error(f"Ошибка сервера: {response.status_code}")
+
+                if resp.status_code == 503 and attempt < max_retries - 1:
+                    logger.warning(f"OpenAI API 503, retry {attempt + 2}/{max_retries}...")
+                    time.sleep(2)
+                    continue
+
+                resp.raise_for_status()
+                response_json = resp.json()
+                corrected_text = response_json["choices"][0]["message"]["content"]
+                return corrected_text
+            except requests.RequestException as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Ошибка OpenAI API (попытка {attempt + 1}/{max_retries}): {e}")
+                    time.sleep(2)
+                    continue
+                logger.error(f"Ошибка OpenAI API после {max_retries} попыток: {e}")
                 return text
-            
-            # Парсинг ответа
-            try:
-                response_json = response.json()
-                logger.info(f"Ответ в формате JSON: {response_json}")
-            except json.JSONDecodeError as e:
-                logger.error(f"Ошибка парсинга JSON: {str(e)}")
+            except (KeyError, json.JSONDecodeError, IndexError) as e:
+                logger.error(f"Ошибка парсинга ответа OpenAI API: {e}")
                 return text
-            
-            # Проверка наличия choices
-            if "choices" not in response_json:
-                logger.error("Ответ от API не содержит поле 'choices'")
-                return text
-            
-            # Проверка, что choices не пустой
-            if not response_json["choices"] or len(response_json["choices"]) == 0:
-                logger.error("OpenAI API вернул пустой ответ")
-                return text
-            
-            # Проверка наличия message и content
-            if "message" not in response_json["choices"][0] or "content" not in response_json["choices"][0]["message"]:
-                logger.error("Ответ от API не содержит message или content")
-                return text
-            
-            corrected_text = response_json["choices"][0]["message"]["content"]
-            logger.info(f"Получен исправленный текст: {corrected_text[:50]}...")
-            return corrected_text
-        except Exception as e:
-            logger.error(f"Ошибка при обращении к OpenAI API: {str(e)}")
-            logger.error(f"Тип ошибки: {type(e).__name__}")
-            import traceback
-            logger.error(f"Трассировка ошибки: {traceback.format_exc()}")
-            return text
 
 # Инициализация бота
 API_TOKEN = BOT_TOKEN
 
-# Настройка прокси, если указана PROXY_STRING
-if PROXY_STRING:
-    proxies = {
-        "http": PROXY_STRING,
-        "https": PROXY_STRING
-    }
+# Настройка прокси
+proxies = get_proxy_dict()
+if proxies:
     logger.info(f"Бот настроен для работы через прокси: {PROXY_STRING}")
 else:
-    proxies = None
     logger.info("Бот работает без прокси")
 
 # Конфигурация OpenAI API
@@ -202,7 +158,6 @@ def transcribe_audio(file_path, max_retries=3):
             # Пробуем распознать речь с тайм-аутом
             try:
                 # Устанавливаем прокси для запросов к Google Speech Recognition
-                import os
                 if PROXY_STRING:
                     os.environ['HTTP_PROXY'] = PROXY_STRING
                     logger.info(f"Установлен прокси для SpeechRecognition: {PROXY_STRING}")
@@ -450,6 +405,6 @@ if __name__ == '__main__':
             logger.error(f"Ошибка в работе бота: {str(e)}")
             logger.error(f"Тип ошибки: {type(e).__name__}")
             import traceback
-            logger.error(f"Трассировка ошибки: {traceback.format_exc()}")
+            logger.error(f"Трассировка: {traceback.format_exc()}")
             logger.info("Перезапуск бота через 5 секунд...")
             time.sleep(5)
