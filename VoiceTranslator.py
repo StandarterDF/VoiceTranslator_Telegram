@@ -213,14 +213,42 @@ def _transcribe_google(file_path: str, max_retries: int = 3) -> str | None:
     return None
 
 
+VOSK_DOWNLOAD_URL = "https://huggingface.co/localstack/vosk-models/resolve/main/vosk-model-small-ru-0.22.zip"
+VOSK_MODEL_DIRNAME = "vosk-model-small-ru-0.22"
+
+def _ensure_vosk_model() -> str:
+    import zipfile
+    candidates = [
+        VOSK_MODEL_PATH,
+        os.path.join("models", VOSK_MODEL_DIRNAME),
+        os.path.join(os.path.dirname(__file__), "models", VOSK_MODEL_DIRNAME),
+    ]
+    for p in candidates:
+        if os.path.isdir(p) and any(f.endswith(".mdl") for _, _, files in os.walk(p) for f in files):
+            return os.path.abspath(p)
+
+    download_dir = os.path.dirname(os.path.abspath(candidates[0]))
+    os.makedirs(download_dir, exist_ok=True)
+    zip_path = os.path.join(download_dir, f"{VOSK_MODEL_DIRNAME}.zip")
+    model_dir = os.path.join(download_dir, VOSK_MODEL_DIRNAME)
+
+    logger.info("Vosk model not found at %s, downloading from %s ...", model_dir, VOSK_DOWNLOAD_URL)
+    r = requests.get(VOSK_DOWNLOAD_URL, stream=True, timeout=300)
+    r.raise_for_status()
+    with open(zip_path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=8192):
+            f.write(chunk)
+    logger.info("Downloaded, extracting...")
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(download_dir)
+    os.remove(zip_path)
+    logger.info("Vosk model ready at %s", model_dir)
+    return str(os.path.abspath(model_dir))
+
+
 def _init_vosk_model():
     from vosk import Model
-    import os
-    path = VOSK_MODEL_PATH
-    if not os.path.isdir(path):
-        alt = os.path.join("models", os.path.basename(path))
-        if os.path.isdir(alt):
-            path = alt
+    path = _ensure_vosk_model()
     logger.info("Loading Vosk model from %s ...", path)
     model = Model(path)
     logger.info("Vosk model loaded")
@@ -236,11 +264,11 @@ def _transcribe_vosk(file_path: str, max_retries: int = 3) -> str | None:
 
     from vosk import KaldiRecognizer
 
+    converted = None
     for attempt in range(max_retries):
         try:
             wf = wave.open(file_path, "rb")
             if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() not in (8000, 16000, 32000, 44100, 48000):
-                logger.warning("Vosk: unsupported audio format, converting...")
                 wf.close()
                 converted = file_path.replace(".wav", "_vosk.wav")
                 audio_seg = AudioSegment.from_file(file_path)
@@ -259,7 +287,6 @@ def _transcribe_vosk(file_path: str, max_retries: int = 3) -> str | None:
             result = json.loads(rec.FinalResult())
             text = result.get("text", "").strip()
             if text:
-                logger.info(f"Vosk транскрипция: {text[:50]}...")
                 return text
             logger.warning("Vosk не распознал речь")
             return None
@@ -270,6 +297,16 @@ def _transcribe_vosk(file_path: str, max_retries: int = 3) -> str | None:
                 time.sleep(1)
                 continue
             return None
+        finally:
+            try:
+                wf.close()
+            except Exception:
+                pass
+            if converted and os.path.exists(converted):
+                try:
+                    os.remove(converted)
+                except Exception:
+                    pass
     return None
 
 

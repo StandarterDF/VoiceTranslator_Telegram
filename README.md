@@ -76,17 +76,7 @@ python VoiceTranslator.py
 | `google` | Google Speech Recognition | ✓ | не нужен | требуется | быстро, но онлайн |
 | `vosk` | Vosk (локально) | ✓ | не нужен | не требуется | ~42MB модель, слабое железо |
 
-Для Vosk скачайте модель и распакуйте в `models/`:
-
-```bash
-# Скачать модель ~42MB
-wget https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip
-# или
-curl -O https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip
-
-# Распаковать
-unzip vosk-model-small-ru-0.22.zip -d models/
-```
+Модель Vosk скачивается автоматически при первом запуске с `https://huggingface.co/localstack/vosk-models/resolve/main/vosk-model-small-ru-0.22.zip` (если не указан другой путь в `VOSK_MODEL_PATH`).
 
 ## Зависимости
 
