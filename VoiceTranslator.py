@@ -125,24 +125,51 @@ else:
 # Конфигурация OpenAI API
 openai_client = OpenAIClient()
 
-# Настройка прокси для Telegram-бота
-try:
+# ---------------------------------------------------------------------------
+# Бот: создание + хендлеры
+# ---------------------------------------------------------------------------
+
+def create_bot() -> telebot.TeleBot:
+    import telebot.apihelper
     if PROXY_STRING:
-        import telebot.apihelper
         telebot.apihelper.proxy = {'https': PROXY_STRING}
-        bot = telebot.TeleBot(API_TOKEN)
+    else:
+        telebot.apihelper.proxy = None
+    b = telebot.TeleBot(API_TOKEN)
+
+    @b.message_handler(commands=['start'])
+    def start(message):
+        b.reply_to(message, 'Привет! Отправьте голосовое сообщение для транскрипции.')
+
+    @b.message_handler(content_types=['voice'])
+    def handle_voice(message):
+        is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == b.get_me().id
+        is_private_chat = message.chat.type == 'private'
+        is_mention = False
+        if hasattr(message, 'caption') and message.caption:
+            is_mention = f'@{b.get_me().username}' in message.caption
+        if not is_reply_to_bot and not is_private_chat and not is_mention:
+            return
+        return handle_voice_message(message)
+
+    @b.message_handler(content_types=['text'])
+    def handle_text(message):
+        if message.reply_to_message and message.reply_to_message.content_type == 'voice':
+            is_mention = f'@{b.get_me().username}' in message.text
+            if is_mention:
+                return handle_replied_voice(message)
+        is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == b.get_me().id
+        if is_reply_to_bot:
+            b.reply_to(message, "Я обрабатываю только голосовые сообщения. Пожалуйста, отправьте голосовое сообщение.")
+
+    if PROXY_STRING:
         logger.info(f"Telegram бот через прокси: {PROXY_STRING} ({PROXY_SCHEME})")
     else:
-        bot = telebot.TeleBot(API_TOKEN)
         logger.info("Telegram бот без прокси")
-except Exception as e:
-    logger.error(f"Ошибка настройки прокси для Telegram-бота: {e}")
-    logger.info("Бот будет работать без прокси")
-    bot = telebot.TeleBot(API_TOKEN)
+    return b
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    bot.reply_to(message, 'Привет! Отправьте голосовое сообщение для транскрипции.')
+
+bot = create_bot()
 
 def convert_ogg_to_wav(input_path, output_path):
     audio = AudioSegment.from_file(input_path)
@@ -518,14 +545,24 @@ def handle_voice_message(message):
 
 if __name__ == '__main__':
     logger.info("Бот запущен")
+    proxy_was_used = bool(PROXY_STRING)
     while True:
         try:
-            logger.info("Запуск бота...")
             bot.polling()
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Ошибка подключения к Telegram API: {e}")
+            if proxy_was_used:
+                logger.warning("Прокси недоступен. Переключаюсь на прямое соединение...")
+                os.environ.pop('HTTP_PROXY', None)
+                os.environ.pop('HTTPS_PROXY', None)
+                os.environ.pop('SOCKS_PROXY', None)
+                proxy_was_used = False
+                create_bot()
+                continue
+            logger.info("Повтор через 10 секунд...")
+            time.sleep(10)
         except Exception as e:
-            logger.error(f"Ошибка в работе бота: {str(e)}")
-            logger.error(f"Тип ошибки: {type(e).__name__}")
-            import traceback
+            logger.error(f"Ошибка: {e}")
             logger.error(f"Трассировка: {traceback.format_exc()}")
-            logger.info("Перезапуск бота через 5 секунд...")
+            logger.info("Перезапуск через 5 секунд...")
             time.sleep(5)
