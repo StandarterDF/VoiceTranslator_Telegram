@@ -11,7 +11,7 @@ import time
 import traceback
 import wave
 
-from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, PROXY_SCHEME, IS_SOCKS, STT_PROVIDER, VOSK_MODEL_PATH, get_proxy_dict
+from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, PROXY_SCHEME, IS_SOCKS, STT_PROVIDER, VOSK_MODEL_PATH, WHISPER_MODEL_SIZE, get_proxy_dict
 
 # Создаем папку logs/, если её нет
 os.makedirs("logs", exist_ok=True)
@@ -337,9 +337,38 @@ def _transcribe_vosk(file_path: str, max_retries: int = 3) -> str | None:
     return None
 
 
+_whisper_model = None
+
+def _transcribe_faster_whisper(file_path: str, max_retries: int = 3) -> str | None:
+    global _whisper_model
+    if _whisper_model is None:
+        logger.info("Loading Faster Whisper model '%s' ...", WHISPER_MODEL_SIZE)
+        from faster_whisper import WhisperModel
+        _whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="auto", compute_type="auto")
+        logger.info("Faster Whisper model loaded")
+
+    for attempt in range(max_retries):
+        try:
+            segments, _ = _whisper_model.transcribe(file_path, language="ru", beam_size=1)
+            text = " ".join(seg.text.strip() for seg in segments).strip()
+            if text:
+                return text
+            logger.warning("Faster Whisper не распознал речь")
+            return None
+        except Exception as e:
+            logger.error(f"Ошибка Faster Whisper (попытка {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
+            return None
+    return None
+
+
 def transcribe_audio(file_path: str, max_retries: int = 3) -> str | None:
     if STT_PROVIDER == "vosk":
         return _transcribe_vosk(file_path, max_retries)
+    if STT_PROVIDER == "faster_whisper":
+        return _transcribe_faster_whisper(file_path, max_retries)
     return _transcribe_google(file_path, max_retries)
 
 @bot.message_handler(content_types=['voice'])

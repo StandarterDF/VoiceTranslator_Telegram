@@ -4,3 +4,4 @@ pydub
 python-dotenv
 requests[socks]
 vosk
+faster-whisper

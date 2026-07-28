@@ -6,4 +6,4 @@ __pycache__/
 logs/*.log
 temp/
 models/*.zip
-models/vosk-model-small-ru-0.22/
+models/vosk-model*/

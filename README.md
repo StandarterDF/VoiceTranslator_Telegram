@@ -66,17 +66,19 @@ python VoiceTranslator.py
 | `OPENAI_BASE_URL` | `http://192.168.0.250:1234/v1` | Базовый URL API (локальный или внешний) |
 | `OPENAI_MODEL` | `mistral-medium-latest` | Модель для коррекции пунктуации |
 | `PROXY_STRING` | — | SOCKS5/HTTP прокси для всех внешних запросов (Telegram API, OpenAI, Google STT) |
-| `STT_PROVIDER` | `google` | Провайдер распознавания речи: `google` (онлайн) или `vosk` (локально) |
+| `STT_PROVIDER` | `google` | Провайдер распознавания речи: `google`, `vosk`, `faster_whisper` |
 | `VOSK_MODEL_PATH` | `models/vosk-model-small-ru-0.22` | Путь к модели Vosk (только для STT_PROVIDER=vosk) |
+| `WHISPER_MODEL_SIZE` | `tiny` | Размер модели Whisper: `tiny`, `base`, `small`, `medium` |
 
 ## Speech-to-Text провайдеры
 
-| Провайдер | Тип | Русский | API-ключ | Интернет | Производительность |
-|-----------|-----|---------|----------|----------|-------------------|
-| `google` | Google Speech Recognition | ✓ | не нужен | требуется | быстро, но онлайн |
-| `vosk` | Vosk (локально) | ✓ | не нужен | не требуется | ~42MB модель, слабое железо |
+| Провайдер | Тип | Русский | API-ключ | Интернет | Качество |
+|-----------|-----|---------|----------|----------|----------|
+| `google` | Google Speech Recognition | ✓ | не нужен | требуется | среднее |
+| `vosk` | Vosk (локально) | ✓ | не нужен | не требуется | низкое |
+| `faster_whisper` | Faster Whisper (локально, CTranslate2) | ✓ | не нужен | не требуется (модель кешируется) | **отличное** |
 
-Модель Vosk скачивается автоматически при первом запуске с `https://huggingface.co/localstack/vosk-models/resolve/main/vosk-model-small-ru-0.22.zip` (если не указан другой путь в `VOSK_MODEL_PATH`).
+**Рекомендация:** `faster_whisper` с `tiny` — ~75MB, отличное качество, работает на CPU.
 
 ## Зависимости
 
@@ -87,6 +89,7 @@ pydub
 python-dotenv
 requests[socks]
 vosk
+faster-whisper
 ```
 
 ## Лицензия
