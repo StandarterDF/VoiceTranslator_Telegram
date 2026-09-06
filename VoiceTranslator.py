@@ -23,6 +23,7 @@ from config import (
     WHISPER_DEVICE,
     WHISPER_COMPUTE,
     get_proxy_dict,
+    ALLOWED_CHAT_IDS,
 )
 
 # Модульные переменные (могут быть переопределены в __main__)
@@ -177,12 +178,36 @@ def create_bot() -> telebot.TeleBot:
         telebot.apihelper.proxy = None
     b = telebot.TeleBot(API_TOKEN)
 
+    def _is_authorized(message) -> bool:
+        """Разрешён ли пользователь/чат: проверка по from_user.id и chat.id."""
+        if not ALLOWED_CHAT_IDS:
+            return False
+        user_id = getattr(message.from_user, "id", None)
+        chat_id = getattr(message.chat, "id", None)
+        return user_id in ALLOWED_CHAT_IDS or chat_id in ALLOWED_CHAT_IDS
+
     @b.message_handler(commands=["start"])
     def start(message):
+        if not _is_authorized(message):
+            logger.warning(
+                "Доступ запрещён для user_id=%s chat_id=%s",
+                message.from_user.id,
+                message.chat.id,
+            )
+            b.reply_to(message, "Доступ запрещён.")
+            return
         b.reply_to(message, "Привет! Отправьте голосовое сообщение для транскрипции.")
 
     @b.message_handler(content_types=["voice"])
     def handle_voice(message):
+        if not _is_authorized(message):
+            logger.warning(
+                "Доступ запрещён для user_id=%s chat_id=%s",
+                message.from_user.id,
+                message.chat.id,
+            )
+            b.reply_to(message, "Доступ запрещён.")
+            return
         is_reply_to_bot = (
             message.reply_to_message
             and message.reply_to_message.from_user.id == b.get_me().id
@@ -197,6 +222,14 @@ def create_bot() -> telebot.TeleBot:
 
     @b.message_handler(content_types=["text"])
     def handle_text(message):
+        if not _is_authorized(message):
+            logger.warning(
+                "Доступ запрещён для user_id=%s chat_id=%s",
+                message.from_user.id,
+                message.chat.id,
+            )
+            b.reply_to(message, "Доступ запрещён.")
+            return
         if (
             message.reply_to_message
             and message.reply_to_message.content_type == "voice"
@@ -222,6 +255,15 @@ def create_bot() -> telebot.TeleBot:
 
 
 bot = create_bot()
+
+
+def _is_authorized(message) -> bool:
+    """Разрешён ли пользователь/чат: проверка по from_user.id и chat.id."""
+    if not ALLOWED_CHAT_IDS:
+        return False
+    user_id = getattr(message.from_user, "id", None)
+    chat_id = getattr(message.chat, "id", None)
+    return user_id in ALLOWED_CHAT_IDS or chat_id in ALLOWED_CHAT_IDS
 
 
 def convert_ogg_to_wav(input_path, output_path):
@@ -481,6 +523,14 @@ def transcribe_audio(file_path: str, max_retries: int = 3) -> str | None:
 
 @bot.message_handler(content_types=["voice"])
 def handle_voice(message):
+    if not _is_authorized(message):
+        logger.warning(
+            "Доступ запрещён для user_id=%s chat_id=%s",
+            message.from_user.id,
+            message.chat.id,
+        )
+        bot.reply_to(message, "Доступ запрещён.")
+        return
     # Проверяем, является ли сообщение ответом на сообщение бота
     is_reply_to_bot = (
         message.reply_to_message
@@ -504,6 +554,14 @@ def handle_voice(message):
 
 @bot.message_handler(content_types=["text"])
 def handle_text(message):
+    if not _is_authorized(message):
+        logger.warning(
+            "Доступ запрещён для user_id=%s chat_id=%s",
+            message.from_user.id,
+            message.chat.id,
+        )
+        bot.reply_to(message, "Доступ запрещён.")
+        return
     # Проверяем, является ли сообщение ответом на голосовое сообщение и упоминается ли бот
     if message.reply_to_message and message.reply_to_message.content_type == "voice":
         is_mention = f"@{bot.get_me().username}" in message.text
@@ -607,6 +665,14 @@ def _download_voice(file_id):
 
 
 def handle_replied_voice(message):
+    if not _is_authorized(message):
+        logger.warning(
+            "Доступ запрещён для user_id=%s chat_id=%s",
+            message.from_user.id,
+            message.chat.id,
+        )
+        bot.reply_to(message, "Доступ запрещён.")
+        return
     file_path = _download_voice(message.reply_to_message.voice.file_id)
     try:
         wav_path = file_path.replace(".ogg", ".wav")
@@ -621,6 +687,14 @@ def handle_replied_voice(message):
 
 
 def handle_voice_message(message):
+    if not _is_authorized(message):
+        logger.warning(
+            "Доступ запрещён для user_id=%s chat_id=%s",
+            message.from_user.id,
+            message.chat.id,
+        )
+        bot.reply_to(message, "Доступ запрещён.")
+        return
     file_path = _download_voice(message.voice.file_id)
     try:
         wav_path = file_path.replace(".ogg", ".wav")

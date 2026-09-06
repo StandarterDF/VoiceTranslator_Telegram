@@ -39,6 +39,13 @@ except OSError:
     WHISPER_DEVICE = "cpu"
     WHISPER_COMPUTE = "auto"
 
+# Кто может пользоваться ботом (ChatID через запятую). Пусто = бот закрыт для всех.
+ALLOWED_CHAT_IDS = [
+    int(x.strip())
+    for x in os.getenv("ALLOWED_CHAT_IDS", "").split(",")
+    if x.strip() and x.strip().lstrip("-").isdigit()
+]
+
 # LLM постпроцессинг (коррекция пунктуации), по умолчанию выключен
 LLM_POSTPROCESS = os.getenv("LLM_POSTPROCESS", "off").lower() in (
     "1",
