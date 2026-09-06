@@ -30,6 +30,14 @@ STT_PROVIDER = _config.STT_PROVIDER
 WHISPER_MODEL_SIZE = _config.WHISPER_MODEL_SIZE
 WHISPER_MODEL_PATH = _config.WHISPER_MODEL_PATH
 
+# Официальные HuggingFace репозитории для faster-whisper моделей
+WHISPER_REPO = {
+    "tiny": "Systran/faster-whisper-tiny",
+    "base": "Systran/faster-whisper-base",
+    "small": "Systran/faster-whisper-small",
+    "large-v3-turbo": "Systran/faster-whisper-large-v3-turbo",
+}
+
 # Управление LLM-постпроцессингом (коррекцией пунктуации). Может быть переопределено из CLI.
 LLM_POSTPROCESS = _config.LLM_POSTPROCESS
 
@@ -342,6 +350,23 @@ def _init_vosk_model():
     return model
 
 
+def _ensure_whisper_model() -> str:
+    """
+    Возвращает абсолютный путь к локальной директории модели.
+    Если папки нет — скачивает модель с Hugging Face в models/whisper-{size}.
+    """
+    local = os.path.abspath(WHISPER_MODEL_PATH)
+    if os.path.isdir(local) and os.listdir(local):
+        return local
+    repo = WHISPER_REPO.get(WHISPER_MODEL_SIZE, WHISPER_MODEL_PATH)
+    logger.info("Whisper model not found at %s, downloading %s ...", local, repo)
+    from huggingface_hub import snapshot_download
+
+    snapshot_download(repo_id=repo, local_dir=local)
+    logger.info("Whisper model ready at %s", local)
+    return local
+
+
 _vosk_model = None
 
 
@@ -418,7 +443,7 @@ def _transcribe_faster_whisper(file_path: str, max_retries: int = 3) -> str | No
         from faster_whisper import WhisperModel
 
         _whisper_model = WhisperModel(
-            WHISPER_MODEL_PATH, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE
+            _ensure_whisper_model(), device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE
         )
         logger.info(
             "Faster Whisper model loaded on %s (%s)", WHISPER_DEVICE, WHISPER_COMPUTE
