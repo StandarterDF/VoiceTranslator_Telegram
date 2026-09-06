@@ -268,9 +268,9 @@ def _transcribe_google(file_path: str, max_retries: int = 3) -> str | None:
             with AudioFile(file_path) as source:
                 audio = recognizer.record(source)
 
-            if PROXY_STRING:
-                os.environ["HTTP_PROXY"] = PROXY_STRING
-
+            # Google Speech API ходит напрямую, без прокси:
+            # urllib (используется SpeechRecognition) не поддерживает socks5,
+            # а PROXY_STRING обычно socks5. Не ставим HTTP_PROXY в окружение.
             result = recognizer.recognize_google(
                 audio, language="ru-RU", show_all=False
             )
