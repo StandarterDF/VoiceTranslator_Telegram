@@ -30,6 +30,7 @@ WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL_SIZE", "small")
 WHISPER_MODEL_PATH = f"models/whisper-{WHISPER_MODEL_SIZE}"
 
 import ctypes
+
 try:
     ctypes.CDLL("nvcuda.dll")
     WHISPER_DEVICE = "cuda"
@@ -38,10 +39,20 @@ except OSError:
     WHISPER_DEVICE = "cpu"
     WHISPER_COMPUTE = "auto"
 
+# LLM постпроцессинг (коррекция пунктуации), по умолчанию выключен
+LLM_POSTPROCESS = os.getenv("LLM_POSTPROCESS", "off").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
+
 def get_proxy_dict() -> dict | None:
     if not PROXY_STRING:
         return None
     return {"http": PROXY_STRING, "https": PROXY_STRING}
+
 
 def check_proxy_connection() -> bool:
     if not PROXY_STRING:
@@ -50,6 +61,7 @@ def check_proxy_connection() -> bool:
     try:
         from urllib.parse import urlparse
         import socket
+
         parsed = urlparse(PROXY_STRING)
         host = parsed.hostname
         port = parsed.port or 2080

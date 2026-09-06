@@ -12,12 +12,26 @@ import traceback
 import wave
 
 import config as _config
-from config import BOT_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, PROXY_STRING, PROXY_SCHEME, VOSK_MODEL_PATH, WHISPER_DEVICE, WHISPER_COMPUTE, get_proxy_dict
+from config import (
+    BOT_TOKEN,
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
+    OPENAI_MODEL,
+    PROXY_STRING,
+    PROXY_SCHEME,
+    VOSK_MODEL_PATH,
+    WHISPER_DEVICE,
+    WHISPER_COMPUTE,
+    get_proxy_dict,
+)
 
 # Модульные переменные (могут быть переопределены в __main__)
 STT_PROVIDER = _config.STT_PROVIDER
 WHISPER_MODEL_SIZE = _config.WHISPER_MODEL_SIZE
 WHISPER_MODEL_PATH = _config.WHISPER_MODEL_PATH
+
+# Управление LLM-постпроцессингом (коррекцией пунктуации). Может быть переопределено из CLI.
+LLM_POSTPROCESS = _config.LLM_POSTPROCESS
 
 # Создаем папку logs/, если её нет
 os.makedirs("logs", exist_ok=True)
@@ -25,14 +39,17 @@ os.makedirs("logs", exist_ok=True)
 # Настройка логирования
 log_filename = f"logs/{os.path.basename(__file__).replace('.py', '')}_{datetime.datetime.now().strftime('%Y-%m-%d')}.log"
 
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # Добавляем FileHandler
-handler = logging.FileHandler(log_filename, encoding='utf-8')
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+handler = logging.FileHandler(log_filename, encoding="utf-8")
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
+
 
 class OpenAIClient:
     def __init__(self):
@@ -64,19 +81,16 @@ class OpenAIClient:
                         "Только пунктуация и регистр.\n"
                         "5. Если текст пуст или состоит из мусора — верни его как есть.\n\n"
                         "Входной текст для обработки:"
-                    )
+                    ),
                 },
-                {
-                    "role": "user",
-                    "content": text
-                }
-            ]
+                {"role": "user", "content": text},
+            ],
         }
 
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
-            "Accept-Encoding": "identity"
+            "Accept-Encoding": "identity",
         }
 
         max_retries = 3
@@ -86,29 +100,37 @@ class OpenAIClient:
                     f"{self.base_url}/chat/completions",
                     headers=headers,
                     data=json.dumps(request_data),
-                    proxies=proxies or None
+                    proxies=proxies or None,
                 )
 
                 if resp.status_code == 503 and attempt < max_retries - 1:
-                    logger.warning(f"OpenAI API 503, retry {attempt + 2}/{max_retries}...")
+                    logger.warning(
+                        f"OpenAI API 503, retry {attempt + 2}/{max_retries}..."
+                    )
                     time.sleep(2)
                     continue
 
                 resp.raise_for_status()
                 response_json = resp.json()
-                corrected_text = response_json["choices"][0]["message"]["content"].strip()
+                corrected_text = response_json["choices"][0]["message"][
+                    "content"
+                ].strip()
 
                 # Защита от инжекта: если модель вернула больше 10 строк или содержит
                 # характерные маркеры диалога — значит инжект сработал,
                 # возвращаем оригинал
                 if "\n\n" in corrected_text and corrected_text.count("\n") > 5:
-                    logger.warning("Anti-injection triggered: model returned suspiciously long response")
+                    logger.warning(
+                        "Anti-injection triggered: model returned suspiciously long response"
+                    )
                     return text
 
                 return corrected_text
             except requests.RequestException as e:
                 if attempt < max_retries - 1:
-                    logger.warning(f"Ошибка OpenAI API (попытка {attempt + 1}/{max_retries}): {e}")
+                    logger.warning(
+                        f"Ошибка OpenAI API (попытка {attempt + 1}/{max_retries}): {e}"
+                    )
                     time.sleep(2)
                     continue
                 logger.error(f"Ошибка OpenAI API после {max_retries} попыток: {e}")
@@ -117,13 +139,16 @@ class OpenAIClient:
                 logger.error(f"Ошибка парсинга ответа OpenAI API: {e}")
                 return text
 
+
 # Инициализация бота
 API_TOKEN = BOT_TOKEN
 
 # Настройка прокси
 proxies = get_proxy_dict()
 if proxies:
-    logger.info(f"Бот настроен для работы через прокси: {PROXY_STRING} ({PROXY_SCHEME})")
+    logger.info(
+        f"Бот настроен для работы через прокси: {PROXY_STRING} ({PROXY_SCHEME})"
+    )
 else:
     logger.info("Бот работает без прокси")
 
@@ -134,38 +159,52 @@ openai_client = OpenAIClient()
 # Бот: создание + хендлеры
 # ---------------------------------------------------------------------------
 
+
 def create_bot() -> telebot.TeleBot:
     import telebot.apihelper
+
     if PROXY_STRING:
-        telebot.apihelper.proxy = {'https': PROXY_STRING}
+        telebot.apihelper.proxy = {"https": PROXY_STRING}
     else:
         telebot.apihelper.proxy = None
     b = telebot.TeleBot(API_TOKEN)
 
-    @b.message_handler(commands=['start'])
+    @b.message_handler(commands=["start"])
     def start(message):
-        b.reply_to(message, 'Привет! Отправьте голосовое сообщение для транскрипции.')
+        b.reply_to(message, "Привет! Отправьте голосовое сообщение для транскрипции.")
 
-    @b.message_handler(content_types=['voice'])
+    @b.message_handler(content_types=["voice"])
     def handle_voice(message):
-        is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == b.get_me().id
-        is_private_chat = message.chat.type == 'private'
+        is_reply_to_bot = (
+            message.reply_to_message
+            and message.reply_to_message.from_user.id == b.get_me().id
+        )
+        is_private_chat = message.chat.type == "private"
         is_mention = False
-        if hasattr(message, 'caption') and message.caption:
-            is_mention = f'@{b.get_me().username}' in message.caption
+        if hasattr(message, "caption") and message.caption:
+            is_mention = f"@{b.get_me().username}" in message.caption
         if not is_reply_to_bot and not is_private_chat and not is_mention:
             return
         return handle_voice_message(message)
 
-    @b.message_handler(content_types=['text'])
+    @b.message_handler(content_types=["text"])
     def handle_text(message):
-        if message.reply_to_message and message.reply_to_message.content_type == 'voice':
-            is_mention = f'@{b.get_me().username}' in message.text
+        if (
+            message.reply_to_message
+            and message.reply_to_message.content_type == "voice"
+        ):
+            is_mention = f"@{b.get_me().username}" in message.text
             if is_mention:
                 return handle_replied_voice(message)
-        is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == b.get_me().id
+        is_reply_to_bot = (
+            message.reply_to_message
+            and message.reply_to_message.from_user.id == b.get_me().id
+        )
         if is_reply_to_bot:
-            b.reply_to(message, "Я обрабатываю только голосовые сообщения. Пожалуйста, отправьте голосовое сообщение.")
+            b.reply_to(
+                message,
+                "Я обрабатываю только голосовые сообщения. Пожалуйста, отправьте голосовое сообщение.",
+            )
 
     if PROXY_STRING:
         logger.info(f"Telegram бот через прокси: {PROXY_STRING} ({PROXY_SCHEME})")
@@ -176,6 +215,7 @@ def create_bot() -> telebot.TeleBot:
 
 bot = create_bot()
 
+
 def convert_ogg_to_wav(input_path, output_path):
     audio = AudioSegment.from_file(input_path)
     audio.export(output_path, format="wav")
@@ -184,32 +224,34 @@ def convert_ogg_to_wav(input_path, output_path):
 def split_audio_file(input_path, output_dir, segment_length_ms=60000):
     """
     Разбивает аудиофайл на сегменты заданной длины.
-    
+
     Args:
         input_path: Путь к исходному аудиофайлу.
         output_dir: Директория для сохранения сегментов.
         segment_length_ms: Длина каждого сегмента в миллисекундах (по умолчанию 60 секунд).
-    
+
     Returns:
         Список путей к сегментам.
     """
     audio = AudioSegment.from_file(input_path)
     segments = []
-    
+
     # Создаем директорию для сегментов, если ее нет
     os.makedirs(output_dir, exist_ok=True)
-    
+
     # Разбиваем аудио на сегменты
     for i, chunk in enumerate(audio[::segment_length_ms]):
         segment_path = os.path.join(output_dir, f"segment_{i}.wav")
         chunk.export(segment_path, format="wav")
         segments.append(segment_path)
-    
+
     return segments
+
 
 # ---------------------------------------------------------------------------
 # Speech-to-Text провайдеры
 # ---------------------------------------------------------------------------
+
 
 def _transcribe_google(file_path: str, max_retries: int = 3) -> str | None:
     recognizer = Recognizer()
@@ -219,9 +261,11 @@ def _transcribe_google(file_path: str, max_retries: int = 3) -> str | None:
                 audio = recognizer.record(source)
 
             if PROXY_STRING:
-                os.environ['HTTP_PROXY'] = PROXY_STRING
+                os.environ["HTTP_PROXY"] = PROXY_STRING
 
-            result = recognizer.recognize_google(audio, language='ru-RU', show_all=False)
+            result = recognizer.recognize_google(
+                audio, language="ru-RU", show_all=False
+            )
             return result
 
         except sr.UnknownValueError:
@@ -234,29 +278,35 @@ def _transcribe_google(file_path: str, max_retries: int = 3) -> str | None:
                 continue
             return None
         except Exception as e:
-            logger.error(f"Ошибка транскрипции Google (попытка {attempt + 1}/{max_retries}): {e}")
+            logger.error(
+                f"Ошибка транскрипции Google (попытка {attempt + 1}/{max_retries}): {e}"
+            )
             if attempt < max_retries - 1:
                 time.sleep(2)
                 continue
             return None
         finally:
-            os.environ.pop('HTTP_PROXY', None)
-            os.environ.pop('HTTPS_PROXY', None)
+            os.environ.pop("HTTP_PROXY", None)
+            os.environ.pop("HTTPS_PROXY", None)
     return None
 
 
 VOSK_DOWNLOAD_URL = "https://huggingface.co/localstack/vosk-models/resolve/main/vosk-model-small-ru-0.22.zip"
 VOSK_MODEL_DIRNAME = "vosk-model-small-ru-0.22"
 
+
 def _ensure_vosk_model() -> str:
     import zipfile
+
     candidates = [
         VOSK_MODEL_PATH,
         os.path.join("models", VOSK_MODEL_DIRNAME),
         os.path.join(os.path.dirname(__file__), "models", VOSK_MODEL_DIRNAME),
     ]
     for p in candidates:
-        if os.path.isdir(p) and any(f.endswith(".mdl") for _, _, files in os.walk(p) for f in files):
+        if os.path.isdir(p) and any(
+            f.endswith(".mdl") for _, _, files in os.walk(p) for f in files
+        ):
             return os.path.abspath(p)
 
     download_dir = os.path.dirname(os.path.abspath(candidates[0]))
@@ -264,7 +314,11 @@ def _ensure_vosk_model() -> str:
     zip_path = os.path.join(download_dir, f"{VOSK_MODEL_DIRNAME}.zip")
     model_dir = os.path.join(download_dir, VOSK_MODEL_DIRNAME)
 
-    logger.info("Vosk model not found at %s, downloading from %s ...", model_dir, VOSK_DOWNLOAD_URL)
+    logger.info(
+        "Vosk model not found at %s, downloading from %s ...",
+        model_dir,
+        VOSK_DOWNLOAD_URL,
+    )
     r = requests.get(VOSK_DOWNLOAD_URL, stream=True, timeout=300)
     r.raise_for_status()
     with open(zip_path, "wb") as f:
@@ -280,6 +334,7 @@ def _ensure_vosk_model() -> str:
 
 def _init_vosk_model():
     from vosk import Model
+
     path = _ensure_vosk_model()
     logger.info("Loading Vosk model from %s ...", path)
     model = Model(path)
@@ -288,6 +343,7 @@ def _init_vosk_model():
 
 
 _vosk_model = None
+
 
 def _transcribe_vosk(file_path: str, max_retries: int = 3) -> str | None:
     global _vosk_model
@@ -300,11 +356,17 @@ def _transcribe_vosk(file_path: str, max_retries: int = 3) -> str | None:
     for attempt in range(max_retries):
         try:
             wf = wave.open(file_path, "rb")
-            if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() not in (8000, 16000, 32000, 44100, 48000):
+            if (
+                wf.getnchannels() != 1
+                or wf.getsampwidth() != 2
+                or wf.getframerate() not in (8000, 16000, 32000, 44100, 48000)
+            ):
                 wf.close()
                 converted = file_path.replace(".wav", "_vosk.wav")
                 audio_seg = AudioSegment.from_file(file_path)
-                audio_seg = audio_seg.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+                audio_seg = (
+                    audio_seg.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+                )
                 audio_seg.export(converted, format="wav")
                 wf = wave.open(converted, "rb")
 
@@ -344,17 +406,29 @@ def _transcribe_vosk(file_path: str, max_retries: int = 3) -> str | None:
 
 _whisper_model = None
 
+
 def _transcribe_faster_whisper(file_path: str, max_retries: int = 3) -> str | None:
     global _whisper_model
     if _whisper_model is None:
-        logger.info("Loading Faster Whisper model '%s' from %s ...", WHISPER_MODEL_SIZE, WHISPER_MODEL_PATH)
+        logger.info(
+            "Loading Faster Whisper model '%s' from %s ...",
+            WHISPER_MODEL_SIZE,
+            WHISPER_MODEL_PATH,
+        )
         from faster_whisper import WhisperModel
-        _whisper_model = WhisperModel(WHISPER_MODEL_PATH, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE)
-        logger.info("Faster Whisper model loaded on %s (%s)", WHISPER_DEVICE, WHISPER_COMPUTE)
+
+        _whisper_model = WhisperModel(
+            WHISPER_MODEL_PATH, device=WHISPER_DEVICE, compute_type=WHISPER_COMPUTE
+        )
+        logger.info(
+            "Faster Whisper model loaded on %s (%s)", WHISPER_DEVICE, WHISPER_COMPUTE
+        )
 
     for attempt in range(max_retries):
         try:
-            segments, _ = _whisper_model.transcribe(file_path, language="ru", beam_size=1)
+            segments, _ = _whisper_model.transcribe(
+                file_path, language="ru", beam_size=1
+            )
             text = " ".join(seg.text.strip() for seg in segments).strip()
             if text:
                 logger.info(f"Транскрипция завершена. Текст: {text[:100]}...")
@@ -362,7 +436,9 @@ def _transcribe_faster_whisper(file_path: str, max_retries: int = 3) -> str | No
             logger.warning("Faster Whisper не распознал речь")
             return None
         except Exception as e:
-            logger.error(f"Ошибка Faster Whisper (попытка {attempt + 1}/{max_retries}): {e}")
+            logger.error(
+                f"Ошибка Faster Whisper (попытка {attempt + 1}/{max_retries}): {e}"
+            )
             if attempt < max_retries - 1:
                 time.sleep(1)
                 continue
@@ -377,47 +453,57 @@ def transcribe_audio(file_path: str, max_retries: int = 3) -> str | None:
         return _transcribe_faster_whisper(file_path, max_retries)
     return _transcribe_google(file_path, max_retries)
 
-@bot.message_handler(content_types=['voice'])
+
+@bot.message_handler(content_types=["voice"])
 def handle_voice(message):
     # Проверяем, является ли сообщение ответом на сообщение бота
-    is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot.get_me().id
-    
+    is_reply_to_bot = (
+        message.reply_to_message
+        and message.reply_to_message.from_user.id == bot.get_me().id
+    )
+
     # В личных сообщениях бот всегда обрабатывает голосовые сообщения
-    is_private_chat = message.chat.type == 'private'
-    
+    is_private_chat = message.chat.type == "private"
+
     # Проверяем, упоминается ли бот в подписи к голосовому сообщению
     is_mention = False
-    if hasattr(message, 'caption') and message.caption:
-        is_mention = f'@{bot.get_me().username}' in message.caption
-    
+    if hasattr(message, "caption") and message.caption:
+        is_mention = f"@{bot.get_me().username}" in message.caption
+
     # Если это не ответ на сообщение бота, не личное сообщение и не упоминание, игнорируем
     if not is_reply_to_bot and not is_private_chat and not is_mention:
         return
-    
+
     return handle_voice_message(message)
 
 
-@bot.message_handler(content_types=['text'])
+@bot.message_handler(content_types=["text"])
 def handle_text(message):
     # Проверяем, является ли сообщение ответом на голосовое сообщение и упоминается ли бот
-    if message.reply_to_message and message.reply_to_message.content_type == 'voice':
-        is_mention = f'@{bot.get_me().username}' in message.text
-        
+    if message.reply_to_message and message.reply_to_message.content_type == "voice":
+        is_mention = f"@{bot.get_me().username}" in message.text
+
         if is_mention:
             # Обрабатываем голосовое сообщение, на которое отвечают
             return handle_replied_voice(message)
-    
+
     # Проверяем, является ли сообщение ответом на сообщение бота
-    is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == bot.get_me().id
-    
+    is_reply_to_bot = (
+        message.reply_to_message
+        and message.reply_to_message.from_user.id == bot.get_me().id
+    )
+
     # Если это ответ на сообщение бота, отвечаем
     if is_reply_to_bot:
-        bot.reply_to(message, "Я обрабатываю только голосовые сообщения. Пожалуйста, отправьте голосовое сообщение.")
+        bot.reply_to(
+            message,
+            "Я обрабатываю только голосовые сообщения. Пожалуйста, отправьте голосовое сообщение.",
+        )
 
 
 def _transcribe_and_correct(wav_path, message, long_msg):
     needs_split = STT_PROVIDER == "google"
-    needs_correction = STT_PROVIDER == "google"
+    needs_correction = LLM_POSTPROCESS
 
     if needs_split:
         audio = AudioSegment.from_file(wav_path)
@@ -438,7 +524,9 @@ def _transcribe_and_correct(wav_path, message, long_msg):
         text = transcribe_audio(wav_path)
 
     if not text:
-        bot.reply_to(message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз.")
+        bot.reply_to(
+            message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз."
+        )
         return
 
     logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
@@ -448,12 +536,16 @@ def _transcribe_and_correct(wav_path, message, long_msg):
         if not corrected or not corrected.strip():
             logger.warning("Коррекция вернула пустую строку, отправляю оригинал")
             corrected = text
-        logger.info(f"После коррекции ({len(corrected)} символов): {corrected[:200]}...")
+        logger.info(
+            f"После коррекции ({len(corrected)} символов): {corrected[:200]}..."
+        )
     else:
         corrected = text
 
     if not corrected.strip():
-        bot.reply_to(message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз.")
+        bot.reply_to(
+            message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз."
+        )
         return
 
     max_len = 4096
@@ -474,17 +566,17 @@ def _transcribe_and_correct(wav_path, message, long_msg):
                 split_at = corrected.rfind(" ", 0, max_len)
             if split_at == -1:
                 split_at = max_len
-            bot.reply_to(message, corrected[:split_at + 1].strip())
-            corrected = corrected[split_at + 1:].strip()
+            bot.reply_to(message, corrected[: split_at + 1].strip())
+            corrected = corrected[split_at + 1 :].strip()
 
 
 def _download_voice(file_id):
     new_file = bot.get_file(file_id)
     logger.info(f"Получение файла: {new_file.file_path}")
-    temp_dir = 'temp'
+    temp_dir = "temp"
     os.makedirs(temp_dir, exist_ok=True)
-    file_path = os.path.join(temp_dir, f'{file_id}.ogg')
-    with open(file_path, 'wb') as f:
+    file_path = os.path.join(temp_dir, f"{file_id}.ogg")
+    with open(file_path, "wb") as f:
         f.write(bot.download_file(new_file.file_path))
     return file_path
 
@@ -492,9 +584,11 @@ def _download_voice(file_id):
 def handle_replied_voice(message):
     file_path = _download_voice(message.reply_to_message.voice.file_id)
     try:
-        wav_path = file_path.replace('.ogg', '.wav')
+        wav_path = file_path.replace(".ogg", ".wav")
         convert_ogg_to_wav(file_path, wav_path)
-        _transcribe_and_correct(wav_path, message, "Голосовое сообщение длинное. Обрабатываю по частям...")
+        _transcribe_and_correct(
+            wav_path, message, "Голосовое сообщение длинное. Обрабатываю по частям..."
+        )
     finally:
         os.remove(file_path)
         if os.path.exists(wav_path):
@@ -504,51 +598,21 @@ def handle_replied_voice(message):
 def handle_voice_message(message):
     file_path = _download_voice(message.voice.file_id)
     try:
-        wav_path = file_path.replace('.ogg', '.wav')
+        wav_path = file_path.replace(".ogg", ".wav")
         convert_ogg_to_wav(file_path, wav_path)
-        _transcribe_and_correct(wav_path, message, "Ваше голосовое сообщение длинное. Обрабатываю по частям...")
+        _transcribe_and_correct(
+            wav_path,
+            message,
+            "Ваше голосовое сообщение длинное. Обрабатываю по частям...",
+        )
     finally:
         os.remove(file_path)
         if os.path.exists(wav_path):
             os.remove(wav_path)
 
 
-if __name__ == '__main__':
-    logger.info("Бот запущен")
-
-    # Интерактивный выбор STT при старте
-    import sys as _sys, importlib as _il
-
-    print("\n=== VoiceTranslator ===")
-    print("Выберите режим распознавания речи:")
-    print("  1 — Vosk (локально, слабое качество)")
-    print("  2 — Google Speech Recognition (онлайн, + коррекция пунктуации)")
-    print("  3 — Whisper tiny (локально, ~75MB)")
-    print("  4 — Whisper base (локально, ~150MB)")
-    print("  5 — Whisper small (локально, ~500MB)")
-    print("  6 — Whisper large-v3-turbo (локально, ~1.2GB, лучшее качество)")
-    print("  Enter — оставить текущий:", STT_PROVIDER + (f" / {WHISPER_MODEL_SIZE}" if STT_PROVIDER == "faster_whisper" else ""))
-
-    choice = input(">>> ").strip()
-
-    _map = {
-        "1": ("vosk", None),
-        "2": ("google", None),
-        "3": ("faster_whisper", "tiny"),
-        "4": ("faster_whisper", "base"),
-        "5": ("faster_whisper", "small"),
-        "6": ("faster_whisper", "large-v3-turbo"),
-    }
-    if choice in _map:
-        _prov, _size = _map[choice]
-        globals()["STT_PROVIDER"] = _prov
-        if _size:
-            globals()["WHISPER_MODEL_SIZE"] = _size
-            globals()["WHISPER_MODEL_PATH"] = f"models/whisper-{_size}"
-        print(f"Выбран: {_prov}" + (f" / {_size}" if _size else ""))
-    else:
-        print(f"Оставлен: {STT_PROVIDER}" + (f" / {WHISPER_MODEL_SIZE}" if STT_PROVIDER == "faster_whisper" else ""))
-
+def start_polling():
+    """Запуск polling-цикла с fallback на прямое соединение при недоступности прокси."""
     proxy_was_used = bool(PROXY_STRING)
     while True:
         try:
@@ -556,10 +620,12 @@ if __name__ == '__main__':
         except requests.exceptions.ConnectionError as e:
             logger.error(f"Ошибка подключения к Telegram API: {e}")
             if proxy_was_used:
-                logger.warning("Прокси недоступен. Переключаюсь на прямое соединение...")
-                os.environ.pop('HTTP_PROXY', None)
-                os.environ.pop('HTTPS_PROXY', None)
-                os.environ.pop('SOCKS_PROXY', None)
+                logger.warning(
+                    "Прокси недоступен. Переключаюсь на прямое соединение..."
+                )
+                os.environ.pop("HTTP_PROXY", None)
+                os.environ.pop("HTTPS_PROXY", None)
+                os.environ.pop("SOCKS_PROXY", None)
                 proxy_was_used = False
                 create_bot()
                 continue
@@ -570,3 +636,8 @@ if __name__ == '__main__':
             logger.error(f"Трассировка: {traceback.format_exc()}")
             logger.info("Перезапуск через 5 секунд...")
             time.sleep(5)
+
+
+if __name__ == "__main__":
+    logger.info("Бот запущен")
+    start_polling()

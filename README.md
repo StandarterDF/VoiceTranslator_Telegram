@@ -4,22 +4,39 @@
 
 ## Описание
 
-Бот принимает голосовые сообщения в Telegram, распознаёт речь через выбранный STT-провайдер (Vosk / Google / Faster Whisper) и при необходимости исправляет пунктуацию через OpenAI-совместимый API. При старте доступен интерактивный выбор модели.
+Бот принимает голосовые сообщения в Telegram, распознаёт речь через выбранный STT-провайдер (Vosk / Google / Faster Whisper) и при необходимости исправляет пунктуацию через OpenAI-совместимый API. Управление LLM-постпроцессингом (коррекцией пунктуации) доступно для ЛЮБОГО провайдера через флаг `--llm` или переменную `LLM_POSTPROCESS`.
 
 **Особенности:**
 - CUDA / CPU авто-детект, float16 на GPU
-- Интерактивный выбор модели при каждом запуске
+- Управление LLM-постпроцессингом для любого STT-провайдера
 - Умное разбитие длинных сообщений (>4096 символов) по границе предложений
 - Модели хранятся локально в `models/` — без постоянных скачиваний
+- Запуск через TUI, CMD или прямой вызов скрипта
 
 ## Установка
 
 ### Требования
+
 - Python 3.10+
 - pip
 - FFmpeg (для обработки аудио — `pydub`)
 
-### Установка зависимостей
+### Автоматическая установка
+
+Запустите скрипт установки — он создаст виртуальное окружение, установит зависимости и скопирует `.env.example` в `.env` (если `.env` ещё нет).
+
+**Windows:**
+```
+setup.bat
+```
+
+**Linux / macOS:**
+```bash
+chmod +x setup.sh
+bash setup.sh
+```
+
+### Ручная установка (альтернатива)
 
 ```bash
 git clone https://github.com/your-username/VoiceTranslator_TelegramBot
@@ -27,52 +44,83 @@ cd VoiceTranslator_TelegramBot
 python -m venv venv
 # Windows
 .\venv\Scripts\activate
-# Linux/macOS
+# Linux / macOS
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Настройка
+## Настройка (.env)
 
-Скопируйте `.env.example` в `.env` и укажите свои параметры.
-
-### Запуск
-
-```bash
-start.bat
-# или
-python VoiceTranslator.py
-```
-
-При запуске появится меню выбора STT:
-
-```
-=== VoiceTranslator ===
-Выберите режим распознавания речи:
-  1 — Vosk (локально, слабое качество)
-  2 — Google Speech Recognition (онлайн, + коррекция пунктуации)
-  3 — Whisper tiny (локально, ~75MB)
-  4 — Whisper base (локально, ~150MB)
-  5 — Whisper small (локально, ~500MB)
-  6 — Whisper large-v3-turbo (локально, ~1.2GB, лучшее качество)
-  Enter — оставить текущий: faster_whisper / small
->>>
-```
-
-## Конфигурация (.env)
+Скопируйте `.env.example` в `.env` (или используйте `setup.bat` / `setup.sh`) и укажите свои параметры.
 
 | Переменная | По умолчанию | Описание |
 |---|---|---|
 | `BOT_TOKEN` | — | Токен Telegram-бота (получить у @BotFather) |
-| `OPENAI_API_KEY` | — | API-ключ для OpenAI-совместимого API (только для `google` STT) |
+| `OPENAI_API_KEY` | — | API-ключ для OpenAI-совместимого API (нужен для коррекции пунктуации, если включена) |
 | `OPENAI_BASE_URL` | `http://192.168.0.250:1234/v1` | Базовый URL API |
 | `OPENAI_MODEL` | `mistral-medium-latest` | Модель для коррекции пунктуации |
 | `PROXY_STRING` | — | SOCKS5/HTTP прокси для Telegram API |
 | `STT_PROVIDER` | `faster_whisper` | Провайдер: `google`, `vosk`, `faster_whisper` |
 | `VOSK_MODEL_PATH` | `models/vosk-model-small-ru-0.22` | Путь к модели Vosk |
 | `WHISPER_MODEL_SIZE` | `small` | Размер модели: `tiny`, `base`, `small`, `large-v3-turbo` |
+| `LLM_POSTPROCESS` | `off` | Включить LLM-постпроцессинг (коррекцию пунктуации): `on`, `off` |
 
-## Speech-to-Text провайдеры
+## Запуск
+
+### Через start.bat (Windows)
+
+```
+start.bat
+```
+
+Откроется меню выбора режима запуска:
+
+1. **TUI-интерфейс** — рекомендуемый способ. Интерактивный терминальный UI на базе Textual.
+2. **CMD** — выбор модели и LLM-постпроцессинга прямо в консоли.
+
+### TUI
+
+```bash
+python tui_app.py
+```
+
+TUI построен на фреймворке [Textual](https://textual.textualize.io/) и предоставляет:
+- Окно выбора STT-провайдера и модели при запуске (F1 — смена в любое время)
+- Панель логов с цветовой раскраской (ошибки, транскрипции, статус)
+- Статистика: провайдер, модель, устройство (GPU/CPU), количество сообщений и ошибок, uptime
+- Горячие клавиши: `F1` — выбор модели, `F3` — перезапуск бота, `F5` — очистка лога, `Ctrl+C` — выход
+
+### CLI (run.py)
+
+Файл `run.py` — CLI-точка входа для запуска бота без интерактивного TUI.
+
+| Аргумент | Допустимые значения | По умолчанию | Описание |
+|---|---|---|---|
+| `--provider` | `vosk`, `google`, `faster_whisper` | из `.env` | STT-провайдер |
+| `--size` | `tiny`, `base`, `small`, `large-v3-turbo` | из `.env` | Размер Whisper-модели |
+| `--llm` | `on`, `off` | из `.env` | Включить LLM-постпроцессинг |
+
+**Примеры:**
+
+```bash
+# Whisper локально с размером small
+python run.py --provider faster_whisper --size small
+
+# Google + LLM-постпроцессинг
+python run.py --provider google --llm on
+
+# Vosk без коррекции
+python run.py --provider vosk --llm off
+
+# По умолчанию из .env
+python run.py
+```
+
+**Важно:** `--llm` включает коррекцию пунктуации через LLM-модель для **любого** STT-провайдера (раньше была доступна только для `google`).
+
+## Конфигурация (.env)
+
+### Speech-to-Text провайдеры
 
 | Провайдер | Тип | Русский | Требует API-ключ | Интернет | Качество |
 |-----------|-----|---------|-----------------|----------|----------|
@@ -104,22 +152,6 @@ python VoiceTranslator.py
 - при ответе на сообщение бота
 - при упоминании бота в подписи к голосовому (`@BotUsername`)
 
-## TUI (Textual User Interface)
-
-![TUI Screenshot](static/TUI.jpg)
-
-Вместо консольного ввода можно запустить TUI:
-
-```bash
-python tui_app.py
-```
-
-TUI построен на фреймворке [Textual](https://textual.textualize.io/) и предоставляет:
-- Окно выбора STT-провайдера и модели при запуске (F1 — смена в любое время)
-- Панель логов с цветовой раскраской (ошибки, транскрипции, статус)
-- Статистика: провайдер, модель, устройство (GPU/CPU), количество сообщений и ошибок, uptime
-- Горячие клавиши: `F1` — выбор модели, `F3` — перезапуск бота, `F5` — очистка лога, `Ctrl+C` — выход
-
 ## Зависимости
 
 ```
@@ -130,6 +162,7 @@ python-dotenv
 requests[socks]
 vosk
 faster-whisper
+textual>=0.41.0
 ```
 
 ## Лицензия
