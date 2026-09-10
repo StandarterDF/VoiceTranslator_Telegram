@@ -148,8 +148,9 @@ def start_health_server() -> None:
     _health_server = server
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    actual_host, actual_port = server.server_address[:2]
     logger.info(
-        "Health-эндпоинт запущен: http://%s:%s/health", HEALTH_HOST, HEALTH_PORT
+        "Health-эндпоинт запущен: http://%s:%s/health", actual_host, actual_port
     )
 
 
@@ -387,9 +388,49 @@ def _is_authorized(message) -> bool:
     return user_id in ALLOWED_CHAT_IDS or chat_id in ALLOWED_CHAT_IDS
 
 
-def convert_ogg_to_wav(input_path, output_path):
-    audio = AudioSegment.from_file(input_path)
-    audio.export(output_path, format="wav")
+def convert_ogg_to_wav(input_path, output_path, timeout=120):
+    """Конвертирует аудио в WAV 16 kHz mono через ffmpeg с таймаутом.
+
+    pydub вызывает ffmpeg без таймаута и может зависнуть, поэтому запускаем
+    ffmpeg напрямую через subprocess.
+    """
+    import shutil
+    import subprocess
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError(
+            "ffmpeg не найден в PATH — установите ffmpeg (apt install ffmpeg)"
+        )
+
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        input_path,
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        output_path,
+    ]
+    logger.info("Конвертация в WAV: %s -> %s", input_path, output_path)
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"ffmpeg не завершился за {timeout} с: {input_path}")
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"ffmpeg ошибка (код {proc.returncode}): {err[-500:]}")
+    logger.info("Конвертация завершена: %s", output_path)
 
 
 def split_audio_file(input_path, output_dir, segment_length_ms=60000):
@@ -706,6 +747,7 @@ def handle_text(message):
 
 
 def _transcribe_and_correct(wav_path, message, long_msg):
+    logger.info("Начало распознавания: %s", os.path.basename(wav_path))
     status_msg = None
     try:
         status_msg = bot.reply_to(message, "Обрабатываю голосовое сообщение...")
