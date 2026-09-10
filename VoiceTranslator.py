@@ -670,72 +670,87 @@ def handle_text(message):
 
 
 def _transcribe_and_correct(wav_path, message, long_msg):
-    needs_split = STT_PROVIDER == "google"
-    needs_correction = LLM_POSTPROCESS
+    status_msg = None
+    try:
+        status_msg = bot.reply_to(message, "Обрабатываю голосовое сообщение...")
+    except Exception as e:
+        logger.warning(f"Не удалось отправить сообщение о начале обработки: {e}")
 
-    if needs_split:
-        audio = AudioSegment.from_file(wav_path)
-        if len(audio) > 60000:
-            logger.info(f"Аудио длинное ({len(audio) / 1000:.0f}с), разбиваем...")
-            bot.reply_to(message, long_msg)
-            segments_dir = os.path.join(os.path.dirname(wav_path), "segments")
-            segments = split_audio_file(wav_path, segments_dir, segment_length_ms=15000)
-            full_text = ""
-            for i, seg_path in enumerate(segments):
-                seg_text = transcribe_audio(seg_path)
-                if seg_text:
-                    full_text += seg_text + " "
-            text = full_text.strip()
+    try:
+        needs_split = STT_PROVIDER == "google"
+        needs_correction = LLM_POSTPROCESS
+
+        if needs_split:
+            audio = AudioSegment.from_file(wav_path)
+            if len(audio) > 60000:
+                logger.info(f"Аудио длинное ({len(audio) / 1000:.0f}с), разбиваем...")
+                bot.reply_to(message, long_msg)
+                segments_dir = os.path.join(os.path.dirname(wav_path), "segments")
+                segments = split_audio_file(
+                    wav_path, segments_dir, segment_length_ms=15000
+                )
+                full_text = ""
+                for i, seg_path in enumerate(segments):
+                    seg_text = transcribe_audio(seg_path)
+                    if seg_text:
+                        full_text += seg_text + " "
+                text = full_text.strip()
+            else:
+                text = transcribe_audio(wav_path)
         else:
             text = transcribe_audio(wav_path)
-    else:
-        text = transcribe_audio(wav_path)
 
-    if not text:
-        bot.reply_to(
-            message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз."
-        )
-        return
-
-    logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
-
-    if needs_correction:
-        corrected = openai_client.correct_punctuation(text)
-        if not corrected or not corrected.strip():
-            logger.warning("Коррекция вернула пустую строку, отправляю оригинал")
-            corrected = text
-        logger.info(
-            f"После коррекции ({len(corrected)} символов): {corrected[:200]}..."
-        )
-    else:
-        corrected = text
-
-    if not corrected.strip():
-        bot.reply_to(
-            message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз."
-        )
-        return
-
-    max_len = 4096
-    if len(corrected) <= max_len:
-        bot.reply_to(message, corrected)
-    else:
-        while corrected:
-            if len(corrected) <= max_len:
-                bot.reply_to(message, corrected)
-                break
-            split_at = max(
-                corrected.rfind(". ", 0, max_len),
-                corrected.rfind("! ", 0, max_len),
-                corrected.rfind("? ", 0, max_len),
-                corrected.rfind("\n", 0, max_len),
+        if not text:
+            bot.reply_to(
+                message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз."
             )
-            if split_at == -1:
-                split_at = corrected.rfind(" ", 0, max_len)
-            if split_at == -1:
-                split_at = max_len
-            bot.reply_to(message, corrected[: split_at + 1].strip())
-            corrected = corrected[split_at + 1 :].strip()
+            return
+
+        logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
+
+        if needs_correction:
+            corrected = openai_client.correct_punctuation(text)
+            if not corrected or not corrected.strip():
+                logger.warning("Коррекция вернула пустую строку, отправляю оригинал")
+                corrected = text
+            logger.info(
+                f"После коррекции ({len(corrected)} символов): {corrected[:200]}..."
+            )
+        else:
+            corrected = text
+
+        if not corrected.strip():
+            bot.reply_to(
+                message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз."
+            )
+            return
+
+        max_len = 4096
+        if len(corrected) <= max_len:
+            bot.reply_to(message, corrected)
+        else:
+            while corrected:
+                if len(corrected) <= max_len:
+                    bot.reply_to(message, corrected)
+                    break
+                split_at = max(
+                    corrected.rfind(". ", 0, max_len),
+                    corrected.rfind("! ", 0, max_len),
+                    corrected.rfind("? ", 0, max_len),
+                    corrected.rfind("\n", 0, max_len),
+                )
+                if split_at == -1:
+                    split_at = corrected.rfind(" ", 0, max_len)
+                if split_at == -1:
+                    split_at = max_len
+                bot.reply_to(message, corrected[: split_at + 1].strip())
+                corrected = corrected[split_at + 1 :].strip()
+    finally:
+        if status_msg is not None:
+            try:
+                bot.delete_message(status_msg.chat.id, status_msg.message_id)
+            except Exception as e:
+                logger.warning(f"Не удалось удалить сообщение о начале обработки: {e}")
 
 
 def _download_voice(file_id):
