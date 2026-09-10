@@ -286,6 +286,60 @@ else:
 # Конфигурация OpenAI API
 openai_client = OpenAIClient()
 
+
+def _probe_http_proxy(proxy_url: str, timeout: float = 5.0) -> bool:
+    """Проверяет, умеет ли прокси работать как HTTP(S) (CONNECT).
+
+    Возвращает True, если через прокси получен любой HTTP-ответ.
+    """
+    import urllib.error
+    import urllib.request
+
+    handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+    opener = urllib.request.build_opener(handler)
+    try:
+        opener.open("https://www.google.com", timeout=timeout)
+        return True
+    except urllib.error.HTTPError:
+        # Прокси-туннель работает, просто вернулся HTTP-код (4xx/5xx)
+        return True
+    except Exception as e:
+        logger.warning("Прокси %s не работает как HTTP: %s", proxy_url, e)
+        return False
+
+
+_google_proxy_checked = False
+_google_proxy_url: str | None = None
+
+
+def _get_google_proxy_url() -> str | None:
+    """HTTP(S)-прокси для Google STT с однократной программной проверкой.
+
+    PROXY_STRING обычно ``socks5://...``, а urllib не умеет socks5. Тот же
+    host:port может принимать и обычный HTTP CONNECT — проверяем это один раз
+    и, если работает, используем для Google; иначе возвращаем None (напрямую).
+    """
+    global _google_proxy_checked, _google_proxy_url
+    if not PROXY_STRING:
+        return None
+    if _google_proxy_checked:
+        return _google_proxy_url
+
+    _google_proxy_checked = True
+    candidate = (
+        "http://" + PROXY_STRING.split("://", 1)[1]
+        if PROXY_SCHEME.startswith("socks")
+        else PROXY_STRING
+    )
+    if _probe_http_proxy(candidate):
+        _google_proxy_url = candidate
+        logger.info("Прокси поддерживает HTTP — Google STT пойдёт через %s", candidate)
+    else:
+        _google_proxy_url = None
+        logger.info("Прокси не поддерживает HTTP — Google STT пойдёт напрямую")
+    return _google_proxy_url
+
+
 # ---------------------------------------------------------------------------
 # Бот: создание + хендлеры
 # ---------------------------------------------------------------------------
@@ -503,6 +557,16 @@ def split_audio_file(input_path, output_dir, segment_length_ms=60000, timeout=30
 
 
 def _transcribe_google(file_path: str, max_retries: int = 3) -> str | None:
+    import urllib.request
+
+    proxy_url = _get_google_proxy_url()
+    if proxy_url:
+        logger.info("Google STT через прокси: %s", proxy_url)
+        handler = urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url})
+    else:
+        handler = urllib.request.ProxyHandler({})
+    urllib.request.install_opener(urllib.request.build_opener(handler))
+
     recognizer = Recognizer()
     recognizer.operation_timeout = 30
     for attempt in range(max_retries):
@@ -511,9 +575,6 @@ def _transcribe_google(file_path: str, max_retries: int = 3) -> str | None:
             with AudioFile(file_path) as source:
                 audio = recognizer.record(source)
 
-            # Google Speech API ходит напрямую, без прокси:
-            # urllib (используется SpeechRecognition) не поддерживает socks5,
-            # а PROXY_STRING обычно socks5. Не ставим HTTP_PROXY в окружение.
             result = recognizer.recognize_google(
                 audio, language="ru-RU", show_all=False
             )
@@ -536,9 +597,6 @@ def _transcribe_google(file_path: str, max_retries: int = 3) -> str | None:
                 time.sleep(2)
                 continue
             return None
-        finally:
-            os.environ.pop("HTTP_PROXY", None)
-            os.environ.pop("HTTPS_PROXY", None)
     return None
 
 
