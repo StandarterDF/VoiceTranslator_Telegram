@@ -7,6 +7,7 @@ from pydub import AudioSegment
 import datetime
 import requests
 import json
+import signal
 import threading
 import time
 import traceback
@@ -78,6 +79,8 @@ _health_state = {
     "last_error": None,
 }
 _health_server_started = False
+_health_server = None
+_stop_event = threading.Event()
 
 
 def set_polling_active(active: bool) -> None:
@@ -125,7 +128,7 @@ class _HealthHandler(BaseHTTPRequestHandler):
 
 def start_health_server() -> None:
     """Запустить HTTP-сервер /health в фоновом потоке (однократно)."""
-    global _health_server_started
+    global _health_server_started, _health_server
     if not HEALTH_ENABLED or _health_server_started:
         return
     _health_server_started = True
@@ -133,18 +136,35 @@ def start_health_server() -> None:
         server = ThreadingHTTPServer((HEALTH_HOST, HEALTH_PORT), _HealthHandler)
     except OSError as e:
         logger.error(
-            "Не удалось запустить health-сервер на %s:%s: %s",
+            "Не удалось запустить health-сервер на %s:%s: %s. "
+            "Порт занят другим процессом? Проверьте: ss -ltnp | grep %s",
             HEALTH_HOST,
             HEALTH_PORT,
             e,
+            HEALTH_PORT,
         )
         _health_server_started = False
         return
+    _health_server = server
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     logger.info(
         "Health-эндпоинт запущен: http://%s:%s/health", HEALTH_HOST, HEALTH_PORT
     )
+
+
+def shutdown_health_server() -> None:
+    """Остановить health-сервер и освободить порт."""
+    global _health_server_started, _health_server
+    if _health_server is not None:
+        try:
+            _health_server.shutdown()
+            _health_server.server_close()
+            logger.info("Health-эндпоинт остановлен")
+        except Exception as e:
+            logger.warning("Ошибка остановки health-сервера: %s", e)
+        _health_server = None
+    _health_server_started = False
 
 
 class OpenAIClient:
@@ -888,36 +908,59 @@ def handle_voice_message(message):
                     pass
 
 
+def _handle_stop_signal(signum, frame):
+    """Аккуратная остановка по SIGINT/SIGTERM (Ctrl+C, kill, systemd)."""
+    logger.info("Получен сигнал %s — останавливаю бота...", signum)
+    _stop_event.set()
+    try:
+        bot.stop_polling()
+    except Exception:
+        pass
+
+
 def start_polling():
     """Запуск polling-цикла с fallback на прямое соединение при недоступности прокси."""
     start_health_server()
     set_polling_active(True)
+    try:
+        signal.signal(signal.SIGINT, _handle_stop_signal)
+        signal.signal(signal.SIGTERM, _handle_stop_signal)
+    except ValueError:
+        # Не главный поток — сигналы недоступны
+        pass
     proxy_was_used = bool(PROXY_STRING)
-    while True:
-        try:
-            set_health_error(None)
-            bot.polling()
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"Ошибка подключения к Telegram API: {e}")
-            set_health_error(f"ConnectionError: {e}")
-            if proxy_was_used:
-                logger.warning(
-                    "Прокси недоступен. Переключаюсь на прямое соединение..."
-                )
-                os.environ.pop("HTTP_PROXY", None)
-                os.environ.pop("HTTPS_PROXY", None)
-                os.environ.pop("SOCKS_PROXY", None)
-                proxy_was_used = False
-                create_bot()
-                continue
-            logger.info("Повтор через 10 секунд...")
-            time.sleep(10)
-        except Exception as e:
-            logger.error(f"Ошибка: {e}")
-            logger.error(f"Трассировка: {traceback.format_exc()}")
-            set_health_error(f"{type(e).__name__}: {e}")
-            logger.info("Перезапуск через 5 секунд...")
-            time.sleep(5)
+    try:
+        while not _stop_event.is_set():
+            try:
+                set_health_error(None)
+                bot.polling()
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f"Ошибка подключения к Telegram API: {e}")
+                set_health_error(f"ConnectionError: {e}")
+                if proxy_was_used:
+                    logger.warning(
+                        "Прокси недоступен. Переключаюсь на прямое соединение..."
+                    )
+                    os.environ.pop("HTTP_PROXY", None)
+                    os.environ.pop("HTTPS_PROXY", None)
+                    os.environ.pop("SOCKS_PROXY", None)
+                    proxy_was_used = False
+                    create_bot()
+                    continue
+                logger.info("Повтор через 10 секунд...")
+                _stop_event.wait(10)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                logger.error(f"Ошибка: {e}")
+                logger.error(f"Трассировка: {traceback.format_exc()}")
+                set_health_error(f"{type(e).__name__}: {e}")
+                logger.info("Перезапуск через 5 секунд...")
+                _stop_event.wait(5)
+    finally:
+        set_polling_active(False)
+        shutdown_health_server()
+        logger.info("Бот остановлен")
 
 
 if __name__ == "__main__":
