@@ -13,8 +13,10 @@ import time
 import traceback
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
 import config as _config
+import stats_manager
 from config import (
     BOT_TOKEN,
     OPENAI_API_KEY,
@@ -95,6 +97,15 @@ def set_health_error(error: str | None) -> None:
         _health_state["last_error"] = error
 
 
+def _stt_model_label() -> str:
+    """Человекочитаемое имя активной STT-модели."""
+    if STT_PROVIDER == "faster_whisper":
+        return WHISPER_MODEL_SIZE
+    if STT_PROVIDER == "vosk":
+        return os.path.basename(VOSK_MODEL_PATH.rstrip("/\\"))
+    return "google"
+
+
 def _health_payload() -> dict:
     with _health_lock:
         state = dict(_health_state)
@@ -103,6 +114,54 @@ def _health_payload() -> dict:
     state["model"] = WHISPER_MODEL_SIZE if STT_PROVIDER == "faster_whisper" else None
     state["device"] = "GPU" if WHISPER_DEVICE == "cuda" else "CPU"
     return state
+
+
+def _stats_settings() -> dict:
+    """Снимок текущей конфигурации для дашборда."""
+    return {
+        "stt_provider": STT_PROVIDER,
+        "stt_model": _stt_model_label(),
+        "whisper_device": "GPU" if WHISPER_DEVICE == "cuda" else "CPU",
+        "whisper_compute": WHISPER_COMPUTE,
+        "llm_enabled": LLM_POSTPROCESS,
+        "llm_model": OPENAI_MODEL,
+        "llm_base_url": OPENAI_BASE_URL,
+        "llm_api_type": LLM_API_TYPE,
+        "llm_reasoning_effort": LLM_REASONING_EFFORT or "off",
+        "health_port": HEALTH_PORT,
+    }
+
+
+def _parse_date_range(query: dict) -> tuple[float | None, float | None]:
+    """Разобрать ?from=YYYY-MM-DD&to=YYYY-MM-DD в unix-таймстампы."""
+    from_str = (query.get("from", [None])[0] or "").strip()
+    to_str = (query.get("to", [None])[0] or "").strip()
+    if not from_str and not to_str:
+        return None, None
+    try:
+        d1 = datetime.date.fromisoformat(from_str)
+        d2 = datetime.date.fromisoformat(to_str)
+    except ValueError:
+        return None, None
+    if d1 > d2:
+        return None, None
+    start = datetime.datetime.combine(d1, datetime.time.min).timestamp()
+    end = datetime.datetime.combine(
+        d2 + datetime.timedelta(days=1), datetime.time.min
+    ).timestamp()
+    return start, end
+
+
+def _stats_payload(query: dict) -> dict:
+    custom_start, custom_end = _parse_date_range(query)
+    return stats_manager.build_stats(
+        settings=_stats_settings(),
+        custom_start=custom_start,
+        custom_end=custom_end,
+    )
+
+
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 
 class _HealthHandler(BaseHTTPRequestHandler):
@@ -114,11 +173,33 @@ class _HealthHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_file(self, path: str, content_type: str) -> None:
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError:
+            self._send(404, {"error": "not found"})
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
-        if self.path.split("?")[0] in ("/health", "/healthz", "/"):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        if path in ("/health", "/healthz", "/"):
             payload = _health_payload()
             healthy = bool(payload["polling"]) and not payload["last_error"]
             self._send(200 if healthy else 503, payload)
+        elif path == "/stats":
+            self._send_file(
+                os.path.join(_STATIC_DIR, "stats.html"), "text/html; charset=utf-8"
+            )
+        elif path == "/stats/api":
+            self._send(200, _stats_payload(parse_qs(parsed.query)))
         else:
             self._send(404, {"error": "not found"})
 
@@ -150,7 +231,9 @@ def start_health_server() -> None:
     thread.start()
     actual_host, actual_port = server.server_address[:2]
     logger.info(
-        "Health-эндпоинт запущен: http://%s:%s/health", actual_host, actual_port
+        "Health-эндпоинт запущен: http://%s:%s/health (статистика: /stats)",
+        actual_host,
+        actual_port,
     )
 
 
@@ -172,6 +255,8 @@ class OpenAIClient:
     def __init__(self):
         self.api_key = OPENAI_API_KEY
         self.base_url = OPENAI_BASE_URL
+        # Usage последнего запроса ({"prompt_tokens", "completion_tokens", ...})
+        self.last_usage: dict | None = None
 
     def correct_punctuation(self, text):
         request_data = {
@@ -224,6 +309,7 @@ class OpenAIClient:
         }
 
         max_retries = 3
+        self.last_usage = None
         for attempt in range(max_retries):
             try:
                 resp = requests.post(
@@ -243,6 +329,9 @@ class OpenAIClient:
 
                 resp.raise_for_status()
                 response_json = resp.json()
+                usage = response_json.get("usage")
+                if isinstance(usage, dict):
+                    self.last_usage = usage
                 corrected_text = response_json["choices"][0]["message"][
                     "content"
                 ].strip()
@@ -845,7 +934,43 @@ def handle_text(message):
 
 
 def _transcribe_and_correct(wav_path, message, long_msg):
+    req_start = time.monotonic()
     logger.info("Начало распознавания: %s", os.path.basename(wav_path))
+
+    duration_s = None
+    try:
+        with wave.open(wav_path, "rb") as wf:
+            duration_s = wf.getnframes() / wf.getframerate()
+    except Exception:
+        duration_s = None
+
+    stt_s = None
+    llm_s = None
+    prompt_tokens = 0
+    completion_tokens = 0
+    llm_used = False
+    preview = ""
+
+    def _log(event_type, *, chars_in=0, chars_out=0, error=None):
+        stats_manager.log_event(
+            event_type,
+            provider=STT_PROVIDER,
+            stt_model=_stt_model_label(),
+            duration_s=duration_s,
+            latency_s=time.monotonic() - req_start,
+            stt_s=stt_s,
+            llm_s=llm_s,
+            chars_in=chars_in,
+            chars_out=chars_out,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            llm_used=llm_used,
+            user_id=getattr(message.from_user, "id", None),
+            chat_type=getattr(message.chat, "type", ""),
+            preview=preview,
+            error=error,
+        )
+
     status_msg = None
     try:
         logger.info("Отправляю статусное сообщение...")
@@ -858,9 +983,9 @@ def _transcribe_and_correct(wav_path, message, long_msg):
         needs_split = STT_PROVIDER == "google"
         needs_correction = LLM_POSTPROCESS
 
+        stt_start = time.monotonic()
         if needs_split:
-            with wave.open(wav_path, "rb") as wf:
-                duration_ms = wf.getnframes() / wf.getframerate() * 1000
+            duration_ms = (duration_s or 0) * 1000
             if duration_ms > 60000:
                 logger.info(f"Аудио длинное ({duration_ms / 1000:.0f}с), разбиваем...")
                 bot.reply_to(message, long_msg)
@@ -878,17 +1003,26 @@ def _transcribe_and_correct(wav_path, message, long_msg):
                 text = transcribe_audio(wav_path)
         else:
             text = transcribe_audio(wav_path)
+        stt_s = time.monotonic() - stt_start
 
         if not text:
             bot.reply_to(
                 message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз."
             )
+            _log("error", error="speech not recognized")
             return
 
+        preview = text[:80]
         logger.info(f"Транскрипция ({len(text)} символов): {text[:200]}...")
 
         if needs_correction:
+            llm_start = time.monotonic()
             corrected = openai_client.correct_punctuation(text)
+            llm_s = time.monotonic() - llm_start
+            llm_used = True
+            usage = openai_client.last_usage or {}
+            prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(usage.get("completion_tokens", 0) or 0)
             if not corrected or not corrected.strip():
                 logger.warning("Коррекция вернула пустую строку, отправляю оригинал")
                 corrected = text
@@ -902,8 +1036,10 @@ def _transcribe_and_correct(wav_path, message, long_msg):
             bot.reply_to(
                 message, "Не удалось распознать речь. Пожалуйста, попробуйте еще раз."
             )
+            _log("error", chars_in=len(text), error="empty result")
             return
 
+        out_chars = len(corrected)
         max_len = 4096
         if len(corrected) <= max_len:
             bot.reply_to(message, corrected)
@@ -924,6 +1060,11 @@ def _transcribe_and_correct(wav_path, message, long_msg):
                     split_at = max_len
                 bot.reply_to(message, corrected[: split_at + 1].strip())
                 corrected = corrected[split_at + 1 :].strip()
+
+        _log("voice", chars_in=len(text), chars_out=out_chars)
+    except Exception as e:
+        _log("error", error=f"{type(e).__name__}: {e}")
+        raise
     finally:
         if status_msg is not None:
             try:
