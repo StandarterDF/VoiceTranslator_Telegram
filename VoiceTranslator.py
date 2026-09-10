@@ -433,30 +433,67 @@ def convert_ogg_to_wav(input_path, output_path, timeout=120):
     logger.info("Конвертация завершена: %s", output_path)
 
 
-def split_audio_file(input_path, output_dir, segment_length_ms=60000):
-    """
-    Разбивает аудиофайл на сегменты заданной длины.
+def split_audio_file(input_path, output_dir, segment_length_ms=60000, timeout=300):
+    """Разбивает аудиофайл на сегменты через ffmpeg (с таймаутом, без pydub).
 
     Args:
         input_path: Путь к исходному аудиофайлу.
         output_dir: Директория для сохранения сегментов.
-        segment_length_ms: Длина каждого сегмента в миллисекундах (по умолчанию 60 секунд).
+        segment_length_ms: Длина каждого сегмента в миллисекундах.
 
     Returns:
         Список путей к сегментам.
     """
-    audio = AudioSegment.from_file(input_path)
-    segments = []
+    import glob
+    import shutil
+    import subprocess
 
-    # Создаем директорию для сегментов, если ее нет
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError(
+            "ffmpeg не найден в PATH — установите ffmpeg (apt install ffmpeg)"
+        )
+
     os.makedirs(output_dir, exist_ok=True)
+    for old in glob.glob(os.path.join(output_dir, "segment_*.wav")):
+        try:
+            os.remove(old)
+        except OSError:
+            pass
 
-    # Разбиваем аудио на сегменты
-    for i, chunk in enumerate(audio[::segment_length_ms]):
-        segment_path = os.path.join(output_dir, f"segment_{i}.wav")
-        chunk.export(segment_path, format="wav")
-        segments.append(segment_path)
+    segment_time = max(1, int(segment_length_ms / 1000))
+    pattern = os.path.join(output_dir, "segment_%03d.wav")
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        input_path,
+        "-f",
+        "segment",
+        "-segment_time",
+        str(segment_time),
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        pattern,
+    ]
+    logger.info("Разбиение на сегменты по %s с: %s", segment_time, input_path)
+    try:
+        proc = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"ffmpeg (split) не завершился за {timeout} с")
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"ffmpeg split ошибка (код {proc.returncode}): {err[-500:]}")
 
+    segments = sorted(glob.glob(os.path.join(output_dir, "segment_*.wav")))
+    logger.info("Сегментов получено: %d", len(segments))
     return segments
 
 
@@ -467,8 +504,10 @@ def split_audio_file(input_path, output_dir, segment_length_ms=60000):
 
 def _transcribe_google(file_path: str, max_retries: int = 3) -> str | None:
     recognizer = Recognizer()
+    recognizer.operation_timeout = 30
     for attempt in range(max_retries):
         try:
+            logger.info("Google STT: распознавание %s", os.path.basename(file_path))
             with AudioFile(file_path) as source:
                 audio = recognizer.record(source)
 
@@ -676,6 +715,7 @@ def _transcribe_faster_whisper(file_path: str, max_retries: int = 3) -> str | No
 
 
 def transcribe_audio(file_path: str, max_retries: int = 3) -> str | None:
+    logger.info("STT провайдер: %s", STT_PROVIDER)
     if STT_PROVIDER == "vosk":
         return _transcribe_vosk(file_path, max_retries)
     if STT_PROVIDER == "faster_whisper":
@@ -750,7 +790,9 @@ def _transcribe_and_correct(wav_path, message, long_msg):
     logger.info("Начало распознавания: %s", os.path.basename(wav_path))
     status_msg = None
     try:
+        logger.info("Отправляю статусное сообщение...")
         status_msg = bot.reply_to(message, "Обрабатываю голосовое сообщение...")
+        logger.info("Статусное сообщение отправлено")
     except Exception as e:
         logger.warning(f"Не удалось отправить сообщение о начале обработки: {e}")
 
@@ -759,9 +801,10 @@ def _transcribe_and_correct(wav_path, message, long_msg):
         needs_correction = LLM_POSTPROCESS
 
         if needs_split:
-            audio = AudioSegment.from_file(wav_path)
-            if len(audio) > 60000:
-                logger.info(f"Аудио длинное ({len(audio) / 1000:.0f}с), разбиваем...")
+            with wave.open(wav_path, "rb") as wf:
+                duration_ms = wf.getnframes() / wf.getframerate() * 1000
+            if duration_ms > 60000:
+                logger.info(f"Аудио длинное ({duration_ms / 1000:.0f}с), разбиваем...")
                 bot.reply_to(message, long_msg)
                 segments_dir = os.path.join(os.path.dirname(wav_path), "segments")
                 segments = split_audio_file(
