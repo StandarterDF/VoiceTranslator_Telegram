@@ -20,10 +20,11 @@ class QueueLogHandler(logging.Handler):
     def __init__(self, q: queue.Queue):
         super().__init__()
         self.q = q
-        self.setFormatter(logging.Formatter(
-            '%(asctime)s - %(levelname)s - %(message)s',
-            datefmt='%H:%M:%S'
-        ))
+        self.setFormatter(
+            logging.Formatter(
+                "%(asctime)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S"
+            )
+        )
 
     def emit(self, record):
         try:
@@ -38,7 +39,7 @@ for h in root_logger.handlers[:]:
 root_logger.addHandler(QueueLogHandler(log_queue))
 root_logger.setLevel(logging.INFO)
 
-for name in ('telebot', 'urllib3', 'requests', 'faster_whisper', 'vosk'):
+for name in ("telebot", "urllib3", "requests", "faster_whisper", "vosk"):
     logging.getLogger(name).setLevel(logging.WARNING)
 
 import config as cfg
@@ -108,27 +109,35 @@ class BotThread:
         vt._vosk_model = None
 
         new_bot = vt.create_bot()
-        new_bot.message_handler(content_types=['voice'])(vt.handle_voice)
-        new_bot.message_handler(content_types=['text'])(vt.handle_text)
+        new_bot.message_handler(content_types=["voice"])(vt.handle_voice)
+        new_bot.message_handler(content_types=["text"])(vt.handle_text)
         vt.bot = new_bot
 
         self.start()
 
     def _run(self):
-        event_queue.put({
-            "type": "status",
-            "text": f"Bot running ({fmt_provider(vt.STT_PROVIDER, vt.WHISPER_MODEL_SIZE)})"
-        })
+        event_queue.put(
+            {
+                "type": "status",
+                "text": f"Bot running ({fmt_provider(vt.STT_PROVIDER, vt.WHISPER_MODEL_SIZE)})",
+            }
+        )
+
+        vt.start_health_server()
+        vt.set_polling_active(True)
 
         while not stop_flag.is_set():
             try:
+                vt.set_health_error(None)
                 vt.bot.polling(none_stop=True, interval=1, timeout=30)
             except Exception as e:
                 if stop_flag.is_set():
                     break
+                vt.set_health_error(f"{type(e).__name__}: {e}")
                 event_queue.put({"type": "error", "text": str(e)})
                 time.sleep(5)
 
+        vt.set_polling_active(False)
         event_queue.put({"type": "status", "text": "Bot stopped"})
 
 
@@ -154,7 +163,9 @@ class ModelSelectScreen(ModalScreen):
             for key, label in PROVIDER_LABELS:
                 yield Button(label, id=f"m{key}", variant="primary")
             yield Button("Use default (env)", id="cancel", variant="default")
-            yield Label("[dim]Up/Down or Tab — navigate | Enter — select[/dim]", id="dlg-hint")
+            yield Label(
+                "[dim]Up/Down or Tab — navigate | Enter — select[/dim]", id="dlg-hint"
+            )
 
     def action_next_button(self):
         self.focus_next()
@@ -308,7 +319,9 @@ class BotTUI(App):
                 yield StatusPanel(id="status")
                 yield Static("", id="stats-bar")
             with Vertical(id="main-panel"):
-                yield RichLog(id="log-widget", highlight=True, markup=True, max_lines=2000)
+                yield RichLog(
+                    id="log-widget", highlight=True, markup=True, max_lines=2000
+                )
         yield Footer()
 
     def on_mount(self):
@@ -357,7 +370,9 @@ class BotTUI(App):
             log.write(f"[bold #33aa33]{msg}[/bold #33aa33]")
             if "символов" in msg:
                 self.msg_count += 1
-        elif "Отправлено" in msg or "отправл" in msg.lower() or "коррекци" in msg.lower():
+        elif (
+            "Отправлено" in msg or "отправл" in msg.lower() or "коррекци" in msg.lower()
+        ):
             log.write(f"[#44bbdd]{msg}[/#44bbdd]")
         elif "запущен" in msg.lower() or "running" in msg.lower():
             log.write(f"[bold #44bbdd]{msg}[/bold #44bbdd]")
@@ -388,7 +403,9 @@ class BotTUI(App):
 
         if not self._bot_started:
             icon = STATUS_WAIT
-        elif "running" in self.status_msg.lower() or "запущен" in self.status_msg.lower():
+        elif (
+            "running" in self.status_msg.lower() or "запущен" in self.status_msg.lower()
+        ):
             icon = STATUS_ON
         elif "ошибк" in self.status_msg.lower() or "error" in self.status_msg.lower():
             icon = STATUS_OFF

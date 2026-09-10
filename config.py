@@ -54,6 +54,16 @@ LLM_POSTPROCESS = os.getenv("LLM_POSTPROCESS", "off").lower() in (
     "on",
 )
 
+# HTTP health-эндпоинт для UptimeKuma и т.п.
+HEALTH_ENABLED = os.getenv("HEALTH_ENABLED", "on").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+HEALTH_HOST = os.getenv("HEALTH_HOST", "0.0.0.0")
+HEALTH_PORT = int(os.getenv("HEALTH_PORT", "8080"))
+
 
 def get_proxy_dict() -> dict | None:
     if not PROXY_STRING:

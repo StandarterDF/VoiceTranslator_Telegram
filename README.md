@@ -65,6 +65,9 @@ pip install -r requirements.txt
 | `WHISPER_MODEL_SIZE` | `small` | Размер модели: `tiny`, `base`, `small`, `large-v3-turbo` |
 | `LLM_POSTPROCESS` | `off` | Включить LLM-постпроцессинг (коррекцию пунктуации): `on`, `off` |
 | `ALLOWED_CHAT_IDS` | — | Кто может пользоваться ботом (ChatID через запятую, напр. `123456789,987654321`). Пусто — бот закрыт для всех. Узнать свой ID: @userinfobot |
+| `HEALTH_ENABLED` | `on` | Включить HTTP health-эндпоинт (`on`/`off`) |
+| `HEALTH_HOST` | `0.0.0.0` | Адрес прослушивания health-эндпоинта |
+| `HEALTH_PORT` | `8080` | Порт health-эндпоинта |
 
 ## Запуск
 
@@ -157,6 +160,30 @@ python run.py
 - в личных сообщениях с ботом
 - при ответе на сообщение бота
 - при упоминании бота в подписи к голосовому (`@BotUsername`)
+
+## Мониторинг (health-эндпоинт)
+
+Бот поднимает простой HTTP-сервер для проверки работоспособности (UptimeKuma, Docker healthcheck и т.п.):
+
+```
+GET http://<host>:8080/health
+```
+
+- `200 OK` — polling-цикл запущен, ошибок нет.
+- `503 Service Unavailable` — бот ещё не стартовал, остановлен или в последнем цикле была ошибка.
+
+Тело ответа (JSON):
+
+```json
+{
+  "polling": true,
+  "last_error": null,
+  "uptime": 123,
+  "provider": "faster_whisper",
+  "model": "small",
+  "device": "GPU"
+}
+```
 
 ## Зависимости
 

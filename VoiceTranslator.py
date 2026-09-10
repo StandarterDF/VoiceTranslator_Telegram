@@ -7,9 +7,11 @@ from pydub import AudioSegment
 import datetime
 import requests
 import json
+import threading
 import time
 import traceback
 import wave
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import config as _config
 from config import (
@@ -22,6 +24,9 @@ from config import (
     VOSK_MODEL_PATH,
     WHISPER_DEVICE,
     WHISPER_COMPUTE,
+    HEALTH_ENABLED,
+    HEALTH_HOST,
+    HEALTH_PORT,
     get_proxy_dict,
     ALLOWED_CHAT_IDS,
 )
@@ -58,6 +63,86 @@ handler = logging.FileHandler(log_filename, encoding="utf-8")
 formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
+
+
+# ---------------------------------------------------------------------------
+# Health-эндпоинт для UptimeKuma и прочих мониторов
+# ---------------------------------------------------------------------------
+
+_health_lock = threading.Lock()
+_health_state = {
+    "started_at": time.time(),
+    "polling": False,
+    "last_error": None,
+}
+_health_server_started = False
+
+
+def set_polling_active(active: bool) -> None:
+    """Отметить, что polling-цикл бота запущен/остановлен."""
+    with _health_lock:
+        _health_state["polling"] = active
+
+
+def set_health_error(error: str | None) -> None:
+    """Зафиксировать последнюю ошибку polling-цикла (None — сбросить)."""
+    with _health_lock:
+        _health_state["last_error"] = error
+
+
+def _health_payload() -> dict:
+    with _health_lock:
+        state = dict(_health_state)
+    state["uptime"] = int(time.time() - state.pop("started_at"))
+    state["provider"] = STT_PROVIDER
+    state["model"] = WHISPER_MODEL_SIZE if STT_PROVIDER == "faster_whisper" else None
+    state["device"] = "GPU" if WHISPER_DEVICE == "cuda" else "CPU"
+    return state
+
+
+class _HealthHandler(BaseHTTPRequestHandler):
+    def _send(self, status: int, body: dict) -> None:
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path.split("?")[0] in ("/health", "/healthz", "/"):
+            payload = _health_payload()
+            healthy = bool(payload["polling"]) and not payload["last_error"]
+            self._send(200 if healthy else 503, payload)
+        else:
+            self._send(404, {"error": "not found"})
+
+    def log_message(self, format, *args):
+        pass
+
+
+def start_health_server() -> None:
+    """Запустить HTTP-сервер /health в фоновом потоке (однократно)."""
+    global _health_server_started
+    if not HEALTH_ENABLED or _health_server_started:
+        return
+    _health_server_started = True
+    try:
+        server = ThreadingHTTPServer((HEALTH_HOST, HEALTH_PORT), _HealthHandler)
+    except OSError as e:
+        logger.error(
+            "Не удалось запустить health-сервер на %s:%s: %s",
+            HEALTH_HOST,
+            HEALTH_PORT,
+            e,
+        )
+        _health_server_started = False
+        return
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    logger.info(
+        "Health-эндпоинт запущен: http://%s:%s/health", HEALTH_HOST, HEALTH_PORT
+    )
 
 
 class OpenAIClient:
@@ -712,12 +797,16 @@ def handle_voice_message(message):
 
 def start_polling():
     """Запуск polling-цикла с fallback на прямое соединение при недоступности прокси."""
+    start_health_server()
+    set_polling_active(True)
     proxy_was_used = bool(PROXY_STRING)
     while True:
         try:
+            set_health_error(None)
             bot.polling()
         except requests.exceptions.ConnectionError as e:
             logger.error(f"Ошибка подключения к Telegram API: {e}")
+            set_health_error(f"ConnectionError: {e}")
             if proxy_was_used:
                 logger.warning(
                     "Прокси недоступен. Переключаюсь на прямое соединение..."
@@ -733,6 +822,7 @@ def start_polling():
         except Exception as e:
             logger.error(f"Ошибка: {e}")
             logger.error(f"Трассировка: {traceback.format_exc()}")
+            set_health_error(f"{type(e).__name__}: {e}")
             logger.info("Перезапуск через 5 секунд...")
             time.sleep(5)
 
