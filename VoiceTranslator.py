@@ -210,6 +210,7 @@ class OpenAIClient:
                     headers=headers,
                     data=json.dumps(request_data),
                     proxies=proxies or None,
+                    timeout=(15, 120),
                 )
 
                 if resp.status_code == 503 and attempt < max_retries - 1:
@@ -768,15 +769,51 @@ def _transcribe_and_correct(wav_path, message, long_msg):
                 logger.warning(f"Не удалось удалить сообщение о начале обработки: {e}")
 
 
-def _download_voice(file_id):
+def _download_voice(file_id, max_retries: int = 3):
+    """Скачивает голосовой файл с таймаутом.
+
+    Штатный ``bot.download_file`` (telebot) делает запрос без таймаута и может
+    висеть бесконечно, поэтому качаем сами через requests с ограничением.
+    """
+    import telebot.apihelper
+
     new_file = bot.get_file(file_id)
-    logger.info(f"Получение файла: {new_file.file_path}")
+    file_path = new_file.file_path
+    logger.info(f"Получение файла: {file_path}")
+
+    if telebot.apihelper.FILE_URL:
+        url = telebot.apihelper.FILE_URL.format(API_TOKEN, file_path)
+    else:
+        url = f"https://api.telegram.org/file/bot{API_TOKEN}/{file_path}"
+
     temp_dir = "temp"
     os.makedirs(temp_dir, exist_ok=True)
-    file_path = os.path.join(temp_dir, f"{file_id}.ogg")
-    with open(file_path, "wb") as f:
-        f.write(bot.download_file(new_file.file_path))
-    return file_path
+    local_path = os.path.join(temp_dir, f"{file_id}.ogg")
+
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(url, proxies=proxies or None, timeout=(15, 60))
+            resp.raise_for_status()
+            with open(local_path, "wb") as f:
+                f.write(resp.content)
+            logger.info(
+                "Файл скачан: %s (%.1f KB)", local_path, len(resp.content) / 1024
+            )
+            return local_path
+        except requests.RequestException as e:
+            last_err = e
+            logger.warning(
+                "Ошибка скачивания файла (попытка %s/%s): %s",
+                attempt + 1,
+                max_retries,
+                str(e).replace(API_TOKEN, "***"),
+            )
+            if attempt < max_retries - 1:
+                time.sleep(2)
+    raise RuntimeError(
+        f"Не удалось скачать голосовой файл: {str(last_err).replace(API_TOKEN, '***')}"
+    )
 
 
 def handle_replied_voice(message):
@@ -788,17 +825,30 @@ def handle_replied_voice(message):
         )
         bot.reply_to(message, "Доступ запрещён.")
         return
-    file_path = _download_voice(message.reply_to_message.voice.file_id)
+    file_path = None
+    wav_path = None
     try:
+        file_path = _download_voice(message.reply_to_message.voice.file_id)
         wav_path = file_path.replace(".ogg", ".wav")
         convert_ogg_to_wav(file_path, wav_path)
         _transcribe_and_correct(
             wav_path, message, "Голосовое сообщение длинное. Обрабатываю по частям..."
         )
+    except Exception as e:
+        logger.error("Ошибка обработки голосового: %s", e, exc_info=True)
+        try:
+            bot.reply_to(
+                message, "Ошибка обработки голосового сообщения. Попробуйте ещё раз."
+            )
+        except Exception:
+            pass
     finally:
-        os.remove(file_path)
-        if os.path.exists(wav_path):
-            os.remove(wav_path)
+        for path in (file_path, wav_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
 
 def handle_voice_message(message):
@@ -810,8 +860,10 @@ def handle_voice_message(message):
         )
         bot.reply_to(message, "Доступ запрещён.")
         return
-    file_path = _download_voice(message.voice.file_id)
+    file_path = None
+    wav_path = None
     try:
+        file_path = _download_voice(message.voice.file_id)
         wav_path = file_path.replace(".ogg", ".wav")
         convert_ogg_to_wav(file_path, wav_path)
         _transcribe_and_correct(
@@ -819,10 +871,21 @@ def handle_voice_message(message):
             message,
             "Ваше голосовое сообщение длинное. Обрабатываю по частям...",
         )
+    except Exception as e:
+        logger.error("Ошибка обработки голосового: %s", e, exc_info=True)
+        try:
+            bot.reply_to(
+                message, "Ошибка обработки голосового сообщения. Попробуйте ещё раз."
+            )
+        except Exception:
+            pass
     finally:
-        os.remove(file_path)
-        if os.path.exists(wav_path):
-            os.remove(wav_path)
+        for path in (file_path, wav_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
 
 def start_polling():
