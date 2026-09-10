@@ -24,6 +24,8 @@ from config import (
     VOSK_MODEL_PATH,
     WHISPER_DEVICE,
     WHISPER_COMPUTE,
+    LLM_API_TYPE,
+    LLM_REASONING_EFFORT,
     HEALTH_ENABLED,
     HEALTH_HOST,
     HEALTH_PORT,
@@ -180,6 +182,19 @@ class OpenAIClient:
                 {"role": "user", "content": text},
             ],
         }
+
+        # Управление "мышлением" модели (аналог reasoning_effort из AILibreTranslater).
+        # off (None) отключает рассуждения, чтобы коррекция не "думала" долго.
+        if LLM_API_TYPE == "deepseek":
+            if LLM_REASONING_EFFORT is None:
+                request_data["thinking"] = {"type": "disabled"}
+            else:
+                request_data["thinking"] = {
+                    "type": "enabled",
+                    "reasoning_effort": LLM_REASONING_EFFORT,
+                }
+        elif LLM_REASONING_EFFORT is not None:
+            request_data["reasoning_effort"] = LLM_REASONING_EFFORT
 
         headers = {
             "Content-Type": "application/json",

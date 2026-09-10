@@ -54,6 +54,24 @@ LLM_POSTPROCESS = os.getenv("LLM_POSTPROCESS", "off").lower() in (
     "on",
 )
 
+
+# Режим "мышления" LLM (аналог reasoning_effort из AILibreTranslater).
+# off / none / пусто -> мышление отключено; low / high / max -> включено.
+def _parse_reasoning_effort(value: str | None) -> str | None:
+    if value is None or value.strip().lower() in ("", "off", "none"):
+        return None
+    return value
+
+
+LLM_REASONING_EFFORT = _parse_reasoning_effort(os.getenv("LLM_REASONING_EFFORT", "off"))
+
+# Тип API: "deepseek" — нативный DeepSeek (top-level "thinking"),
+# "openai" — OpenAI-совместимый (reasoning_effort).
+# Если не задан явно — определяется автоматически по OPENAI_BASE_URL.
+LLM_API_TYPE = os.getenv("LLM_API_TYPE", "").strip().lower()
+if LLM_API_TYPE not in ("openai", "deepseek"):
+    LLM_API_TYPE = "deepseek" if "deepseek" in OPENAI_BASE_URL.lower() else "openai"
+
 # HTTP health-эндпоинт для UptimeKuma и т.п.
 HEALTH_ENABLED = os.getenv("HEALTH_ENABLED", "on").lower() in (
     "1",

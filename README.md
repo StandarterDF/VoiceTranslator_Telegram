@@ -59,6 +59,8 @@ pip install -r requirements.txt
 | `OPENAI_API_KEY` | — | API-ключ для OpenAI-совместимого API (нужен для коррекции пунктуации, если включена) |
 | `OPENAI_BASE_URL` | `http://192.168.0.250:1234/v1` | Базовый URL API |
 | `OPENAI_MODEL` | `mistral-medium-latest` | Модель для коррекции пунктуации |
+| `LLM_REASONING_EFFORT` | `off` | Режим «мышления» модели: `off`, `low`, `high`, `max`. `off` отключает рассуждения (быстрее) |
+| `LLM_API_TYPE` | авто | Тип API: `deepseek` (top-level `thinking`) или `openai` (`reasoning_effort`). Пусто — автоопределение по `OPENAI_BASE_URL` |
 | `PROXY_STRING` | — | SOCKS5/HTTP прокси для Telegram API |
 | `STT_PROVIDER` | `faster_whisper` | Провайдер: `google`, `vosk`, `faster_whisper` |
 | `VOSK_MODEL_PATH` | `models/vosk-model-small-ru-0.22` | Путь к модели Vosk |
@@ -184,6 +186,14 @@ GET http://<host>:8080/health
   "device": "GPU"
 }
 ```
+
+## Режим мышления LLM
+
+По умолчанию рассуждения модели **отключены** (`LLM_REASONING_EFFORT=off`), чтобы коррекция пунктуации не «думала» долго. Логика аналогична проекту AILibreTranslater:
+
+- `LLM_API_TYPE=deepseek` — отправляется top-level `"thinking": {"type": "disabled"}` (при `off`) либо `{"type": "enabled", "reasoning_effort": ...}`.
+- `LLM_API_TYPE=openai` — при заданном уровне отправляется `"reasoning_effort"`, при `off` параметр не добавляется.
+- Если `LLM_API_TYPE` пуст, тип определяется автоматически: `deepseek`, если в `OPENAI_BASE_URL` есть `deepseek`, иначе `openai`.
 
 ## Зависимости
 
